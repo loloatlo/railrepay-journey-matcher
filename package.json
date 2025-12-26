@@ -1,0 +1,55 @@
+{
+  "name": "@railrepay/journey-matcher",
+  "version": "1.0.0",
+  "description": "Journey-matcher service for RailRepay MVP - OTP integration and journey tracking",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:ci": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/index.ts",
+    "start": "node --loader ts-node/esm src/index.ts",
+    "migrate:up": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "migrate:create": "node-pg-migrate create"
+  },
+  "keywords": [
+    "railrepay",
+    "journey-matcher",
+    "otp",
+    "railway"
+  ],
+  "author": "RailRepay Team",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "@testcontainers/postgresql": "^10.13.2",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/pg-promise": "^5.4.3",
+    "@types/supertest": "^6.0.2",
+    "@vitest/coverage-v8": "^2.1.9",
+    "node-pg-migrate": "^7.7.1",
+    "supertest": "^7.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@railrepay/metrics-pusher": "^1.0.1",
+    "@railrepay/postgres-client": "^1.0.0",
+    "@railrepay/winston-logger": "^1.0.0",
+    "axios": "^1.7.9",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "pg-promise": "^11.10.1",
+    "zod": "^3.24.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

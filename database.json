@@ -1,0 +1,10 @@
+{
+  "default": {
+    "user": "${PGUSER}",
+    "password": "${PGPASSWORD}",
+    "host": "${PGHOST}",
+    "port": "${PGPORT}",
+    "database": "${PGDATABASE}",
+    "schema": "journey_matcher"
+  }
+}
