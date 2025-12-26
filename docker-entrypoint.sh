@@ -21,7 +21,7 @@ client.connect()
 "
 
 echo "Running database migrations (manual runner)..."
-node run-migrations-manual.js
+node run-migrations-manual.cjs
 
 echo "Starting journey-matcher service..."
 exec npm start
