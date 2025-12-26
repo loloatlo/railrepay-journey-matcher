@@ -42,7 +42,7 @@ RUN npm ci --only=production && \
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/tsconfig.json ./
-COPY --from=builder /app/.node-pg-migrate.json ./
+COPY --from=builder /app/run-migrations-manual.js ./
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh ./
