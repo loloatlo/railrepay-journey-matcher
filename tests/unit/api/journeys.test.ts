@@ -21,11 +21,9 @@ describe('POST /journeys', () => {
     app = express();
     app.use(express.json());
 
-    // Mock database client
+    // Mock database client (pg Pool format)
     mockDb = {
-      one: vi.fn(),
-      none: vi.fn(),
-      oneOrNone: vi.fn(),
+      query: vi.fn(),
     };
 
     // Mount router (this will fail until we implement it)
@@ -49,8 +47,8 @@ describe('POST /journeys', () => {
 
     const mockJourneyId = '550e8400-e29b-41d4-a716-446655440000';
 
-    // Mock database insert to return journey ID
-    mockDb.one.mockResolvedValue({ id: mockJourneyId });
+    // Mock database insert to return journey ID (pg Pool format)
+    mockDb.query.mockResolvedValue({ rows: [{ id: mockJourneyId }] });
 
     // Act: Make POST request
     const response = await request(app)
@@ -66,7 +64,7 @@ describe('POST /journeys', () => {
     });
 
     // Assert: Verify database was called
-    expect(mockDb.one).toHaveBeenCalledWith(
+    expect(mockDb.query).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO journey_matcher.journeys'),
       expect.arrayContaining(['user_123'])
     );
@@ -135,7 +133,7 @@ describe('POST /journeys', () => {
       journey_type: 'single',
     };
 
-    mockDb.one.mockRejectedValue(new Error('Database connection failed'));
+    mockDb.query.mockRejectedValue(new Error('Database connection failed'));
 
     // Act & Assert
     await request(app)
@@ -153,10 +151,9 @@ describe('GET /journeys/:id', () => {
     app = express();
     app.use(express.json());
 
+    // Mock database client (pg Pool format)
     mockDb = {
-      one: vi.fn(),
-      oneOrNone: vi.fn(),
-      manyOrNone: vi.fn(),
+      query: vi.fn(),
     };
 
     app.use('/journeys', createJourneysRouter(mockDb));
@@ -181,8 +178,10 @@ describe('GET /journeys/:id', () => {
       { id: 'seg2', journey_id: journeyId, segment_order: 2, rid: 'RID002' },
     ];
 
-    mockDb.oneOrNone.mockResolvedValue(mockJourney);
-    mockDb.manyOrNone.mockResolvedValue(mockSegments);
+    // Mock query to return journey first, then segments (pg Pool format)
+    mockDb.query
+      .mockResolvedValueOnce({ rows: [mockJourney] })
+      .mockResolvedValueOnce({ rows: mockSegments });
 
     // Act
     const response = await request(app)
@@ -200,7 +199,7 @@ describe('GET /journeys/:id', () => {
   it('should return 404 for non-existent journey', async () => {
     // Arrange
     const journeyId = 'non-existent-id';
-    mockDb.oneOrNone.mockResolvedValue(null);
+    mockDb.query.mockResolvedValue({ rows: [] });
 
     // Act & Assert
     const response = await request(app)
@@ -213,7 +212,7 @@ describe('GET /journeys/:id', () => {
   it('should handle database errors gracefully', async () => {
     // Arrange
     const journeyId = '550e8400-e29b-41d4-a716-446655440000';
-    mockDb.oneOrNone.mockRejectedValue(new Error('Database error'));
+    mockDb.query.mockRejectedValue(new Error('Database error'));
 
     // Act & Assert
     await request(app)

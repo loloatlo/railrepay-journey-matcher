@@ -47,8 +47,8 @@ export function createJourneysRouter(db: any): Router {
       // For MVP, assume 2-hour journey (will be replaced by OTP data)
       const arrival_datetime = new Date(new Date(departure_datetime).getTime() + 2 * 60 * 60 * 1000).toISOString();
 
-      // Insert journey into database
-      const journey = await db.one(
+      // Insert journey into database (db is a pg Pool)
+      const result = await db.query(
         `INSERT INTO journey_matcher.journeys
           (user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -63,6 +63,7 @@ export function createJourneysRouter(db: any): Router {
           'draft', // Initial status
         ]
       );
+      const journey = result.rows[0];
 
       // Return created journey
       res.status(201).json({
@@ -108,11 +109,12 @@ export function createJourneysRouter(db: any): Router {
     try {
       const journeyId = req.params.id;
 
-      // Fetch journey with segments
-      const journey = await db.oneOrNone(
+      // Fetch journey with segments (db is a pg Pool)
+      const journeyResult = await db.query(
         `SELECT * FROM journey_matcher.journeys WHERE id = $1`,
         [journeyId]
       );
+      const journey = journeyResult.rows[0] || null;
 
       if (!journey) {
         res.status(404).json({
@@ -122,13 +124,14 @@ export function createJourneysRouter(db: any): Router {
         return;
       }
 
-      // Fetch segments
-      const segments = await db.manyOrNone(
+      // Fetch segments (db is a pg Pool)
+      const segmentsResult = await db.query(
         `SELECT * FROM journey_matcher.journey_segments
          WHERE journey_id = $1
          ORDER BY segment_order ASC`,
         [journeyId]
       );
+      const segments = segmentsResult.rows;
 
       // Return journey with segments
       res.status(200).json({
