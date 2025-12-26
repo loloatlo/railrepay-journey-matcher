@@ -97,6 +97,11 @@ function createPgm(client) {
       });
     },
 
+    func: (functionCall) => {
+      // Return a marker object that formatColumnDef will recognize
+      return { __pgmFunc: functionCall };
+    },
+
     flush: async () => {
       for (const op of operations) {
         await op();
@@ -114,8 +119,18 @@ function formatColumnDef(def) {
   if (def.notNull) sql += ' NOT NULL';
   if (def.primaryKey) sql += ' PRIMARY KEY';
   if (def.unique) sql += ' UNIQUE';
-  if (def.default !== undefined) sql += ` DEFAULT ${def.default}`;
+  if (def.default !== undefined) {
+    // Handle pgm.func() calls
+    if (def.default && typeof def.default === 'object' && def.default.__pgmFunc) {
+      sql += ` DEFAULT ${def.default.__pgmFunc}`;
+    } else {
+      sql += ` DEFAULT ${def.default}`;
+    }
+  }
   if (def.references) sql += ` REFERENCES ${def.references}`;
+  if (def.comment) {
+    // Comments are handled separately in PostgreSQL, skip for now
+  }
 
   return sql;
 }
