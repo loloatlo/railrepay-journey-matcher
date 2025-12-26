@@ -5,29 +5,30 @@
 set -e
 
 echo "Initializing journey-matcher database schema..."
-node -e "
-const { Client } = require('pg');
-const fs = require('fs');
+
+# Use ESM-compatible syntax with --input-type=module
+node --input-type=module -e "
+import pg from 'pg';
+import fs from 'fs';
+
+const { Client } = pg;
 const client = new Client({ connectionString: process.env.DATABASE_URL });
 
-client.connect()
-  .then(() => client.query('CREATE SCHEMA IF NOT EXISTS journey_matcher'))
-  .then(() => {
-    console.log('✓ Schema created');
-    const sql = fs.readFileSync('init-schema.sql', 'utf8');
-    return client.query(sql);
-  })
-  .then(() => {
-    console.log('✓ Tables created');
-    return client.end();
-  })
-  .then(() => {
-    console.log('✓ Database initialization complete');
-  })
-  .catch(err => {
-    console.error('Database initialization error:', err.message);
-    process.exit(1);
-  });
+try {
+  await client.connect();
+  await client.query('CREATE SCHEMA IF NOT EXISTS journey_matcher');
+  console.log('✓ Schema created');
+
+  const sql = fs.readFileSync('init-schema.sql', 'utf8');
+  await client.query(sql);
+  console.log('✓ Tables created');
+
+  await client.end();
+  console.log('✓ Database initialization complete');
+} catch (err) {
+  console.error('Database initialization error:', err.message);
+  process.exit(1);
+}
 "
 
 echo "Starting journey-matcher service..."
