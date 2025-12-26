@@ -1,6 +1,5 @@
 {
-  "schema": "journey_matcher",
-  "migrations-table": "pgmigrations",
+  "migrations-table": "journey_matcher_migrations",
   "dir": "migrations",
   "migration-file-language": "js",
   "ignore-pattern": "\\..*"
