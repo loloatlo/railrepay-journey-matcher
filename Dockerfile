@@ -43,6 +43,10 @@ COPY --from=builder /app/src ./src
 COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/tsconfig.json ./
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+
 # Non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 && \
@@ -57,5 +61,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 # Expose port (Railway will override with PORT env var)
 EXPOSE 3000
 
-# Start the service
-CMD ["npm", "start"]
+# Start the service with entrypoint that runs migrations
+ENTRYPOINT ["./docker-entrypoint.sh"]
