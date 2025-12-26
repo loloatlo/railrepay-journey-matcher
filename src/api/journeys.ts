@@ -41,26 +41,23 @@ export function createJourneysRouter(db: any): Router {
       const origin_crs = validatedData.origin_station.substring(0, 3).toUpperCase();
       const destination_crs = validatedData.destination_station.substring(0, 3).toUpperCase();
 
-      // Combine date and time into ISO datetime
-      const departure_datetime = `${validatedData.departure_date}T${validatedData.departure_time}:00Z`;
-
-      // For MVP, assume 2-hour journey (will be replaced by OTP data)
-      const arrival_datetime = new Date(new Date(departure_datetime).getTime() + 2 * 60 * 60 * 1000).toISOString();
+      // Parse departure time into time range (schema uses departure_time_min/max)
+      const departure_time = `${validatedData.departure_time}:00`;
 
       // Insert journey into database (db is a pg Pool)
+      // Schema: id, user_id, origin_crs, destination_crs, departure_date, departure_time_min, departure_time_max
       const result = await db.query(
         `INSERT INTO journey_matcher.journeys
-          (user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+          (user_id, origin_crs, destination_crs, departure_date, departure_time_min, departure_time_max)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id`,
         [
           validatedData.user_id,
           origin_crs,
           destination_crs,
-          departure_datetime,
-          arrival_datetime,
-          validatedData.journey_type,
-          'draft', // Initial status
+          validatedData.departure_date,
+          departure_time,
+          departure_time, // For now, min and max are the same
         ]
       );
       const journey = result.rows[0];
@@ -71,9 +68,9 @@ export function createJourneysRouter(db: any): Router {
         user_id: validatedData.user_id,
         origin_crs,
         destination_crs,
-        departure_datetime,
-        arrival_datetime,
-        status: 'draft',
+        departure_date: validatedData.departure_date,
+        departure_time: validatedData.departure_time,
+        status: 'draft', // Virtual status for API response
         journey_type: validatedData.journey_type,
       });
     } catch (error) {

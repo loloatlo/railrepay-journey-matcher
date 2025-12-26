@@ -60,7 +60,12 @@ describe('POST /journeys', () => {
     expect(response.body).toMatchObject({
       journey_id: mockJourneyId,
       user_id: 'user_123',
+      origin_crs: 'LON',
+      destination_crs: 'YOR',
+      departure_date: '2025-01-25',
+      departure_time: '14:30',
       status: 'draft',
+      journey_type: 'single',
     });
 
     // Assert: Verify database was called
