@@ -24,8 +24,8 @@ export function createHealthRouter(db: any): Router {
     };
 
     try {
-      // Check database connection
-      await db.one('SELECT 1 as health');
+      // Check database connection (db is a pg Pool)
+      await db.query('SELECT 1 as health');
       healthCheck.dependencies.database = 'healthy';
 
       // Return 200 OK if all dependencies healthy

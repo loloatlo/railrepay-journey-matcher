@@ -20,7 +20,7 @@ describe('GET /health', () => {
     app.use(express.json());
 
     mockDb = {
-      one: vi.fn(),
+      query: vi.fn(),
     };
 
     app.use('/health', createHealthRouter(mockDb));
@@ -32,7 +32,7 @@ describe('GET /health', () => {
 
   it('should return 200 when database is healthy', async () => {
     // Arrange
-    mockDb.one.mockResolvedValue({ health: 1 });
+    mockDb.query.mockResolvedValue({ rows: [{ health: 1 }] });
 
     // Act
     const response = await request(app)
@@ -52,7 +52,7 @@ describe('GET /health', () => {
 
   it('should return 503 when database is unhealthy', async () => {
     // Arrange
-    mockDb.one.mockRejectedValue(new Error('Connection refused'));
+    mockDb.query.mockRejectedValue(new Error('Connection refused'));
 
     // Act
     const response = await request(app)
