@@ -1,0 +1,7 @@
+{
+  "schema": "journey_matcher",
+  "migrations-table": "pgmigrations",
+  "dir": "migrations",
+  "migration-file-language": "js",
+  "ignore-pattern": "\\..*"
+}
