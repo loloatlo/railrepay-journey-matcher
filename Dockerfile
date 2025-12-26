@@ -40,9 +40,8 @@ RUN npm ci --only=production && \
 
 # Copy application code
 COPY --from=builder /app/src ./src
-COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/tsconfig.json ./
-COPY --from=builder /app/run-migrations-manual.cjs ./
+COPY --from=builder /app/init-schema.sql ./
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh ./
