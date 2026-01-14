@@ -28,9 +28,11 @@
   "license": "UNLICENSED",
   "private": true,
   "devDependencies": {
+    "@testcontainers/kafka": "^10.13.2",
     "@testcontainers/postgresql": "^10.13.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.6",
     "@types/pg-promise": "^5.4.3",
     "@types/supertest": "^6.0.2",
     "@vitest/coverage-v8": "^2.1.9",
@@ -40,6 +42,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
+    "@railrepay/kafka-client": "^1.0.0",
     "@railrepay/metrics-pusher": "^1.1.0",
     "@railrepay/postgres-client": "^1.0.0",
     "@railrepay/winston-logger": "^1.0.0",

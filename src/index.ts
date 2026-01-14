@@ -12,6 +12,8 @@ import { MetricsPusher, createMetricsRouter } from '@railrepay/metrics-pusher';
 import { randomUUID } from 'crypto';
 import { createJourneysRouter } from './api/journeys.js';
 import { createHealthRouter } from './api/health.js';
+import { createEventConsumer, EventConsumer } from './consumers/event-consumer.js';
+import { createConsumerConfig, ConsumerConfigError } from './consumers/config.js';
 
 // Environment configuration
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -41,6 +43,9 @@ const metricsPusher = new MetricsPusher({
   alloyUrl: process.env.ALLOY_PUSH_URL,
   pushInterval: 15,
 });
+
+// Event consumer instance (initialized in start())
+let eventConsumer: EventConsumer | null = null;
 
 // Create Express app
 const app = express();
@@ -111,11 +116,40 @@ async function start() {
       logger.info('Metrics pusher started');
     }
 
+    // Start Kafka event consumer (TD-JOURNEY-007)
+    try {
+      const consumerConfig = createConsumerConfig();
+      eventConsumer = createEventConsumer({
+        ...consumerConfig,
+        db: db.getPool(),
+        logger,
+      });
+      logger.info('Starting Kafka event consumer...', {
+        groupId: consumerConfig.groupId,
+        brokers: consumerConfig.brokers,
+      });
+      await eventConsumer.start();
+      logger.info('Kafka event consumer started successfully');
+    } catch (error) {
+      if (error instanceof ConsumerConfigError) {
+        // Missing Kafka config - log warning but continue (HTTP API still works)
+        logger.warn('Kafka consumer not started - missing configuration', {
+          error: error.message,
+        });
+      } else {
+        // Other errors - log but don't fail startup (graceful degradation)
+        logger.error('Failed to start Kafka consumer', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     // Start HTTP server
     app.listen(PORT, () => {
       logger.info(`${SERVICE_NAME} listening`, {
         port: PORT,
         environment: NODE_ENV,
+        kafkaConsumerActive: eventConsumer?.isRunning() ?? false,
       });
     });
   } catch (error) {
@@ -131,6 +165,13 @@ process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully...');
 
   try {
+    // Stop event consumer first (TD-JOURNEY-007)
+    if (eventConsumer) {
+      logger.info('Stopping Kafka event consumer...');
+      await eventConsumer.stop();
+      logger.info('Kafka event consumer stopped');
+    }
+
     await metricsPusher.stop();
     await db.disconnect();
     logger.info('Shutdown complete');
