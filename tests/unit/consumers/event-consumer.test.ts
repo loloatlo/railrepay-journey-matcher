@@ -25,10 +25,13 @@ import {
 } from '../../../src/consumers/event-consumer.js';
 
 // Mock KafkaConsumer from @railrepay/kafka-client
+// TD-KAFKA-001: Updated mock to include start() and getSubscribedTopics() (v2.0.0 API)
 vi.mock('@railrepay/kafka-client', () => {
   const mockConnect = vi.fn().mockResolvedValue(undefined);
   const mockDisconnect = vi.fn().mockResolvedValue(undefined);
   const mockSubscribe = vi.fn().mockResolvedValue(undefined);
+  const mockStart = vi.fn().mockResolvedValue(undefined);
+  const mockGetSubscribedTopics = vi.fn().mockReturnValue([]);
   const mockGetStats = vi.fn().mockReturnValue({
     processedCount: 0,
     errorCount: 0,
@@ -37,10 +40,19 @@ vi.mock('@railrepay/kafka-client', () => {
   });
   const mockIsConsumerRunning = vi.fn().mockReturnValue(false);
 
+  // Track subscribed topics for getSubscribedTopics mock
+  const subscribedTopics: string[] = [];
+
   const MockKafkaConsumer = vi.fn(() => ({
     connect: mockConnect,
     disconnect: mockDisconnect,
-    subscribe: mockSubscribe,
+    subscribe: vi.fn((topic: string, handler: Function) => {
+      subscribedTopics.push(topic);
+      mockSubscribe(topic, handler);
+      return Promise.resolve();
+    }),
+    start: mockStart,
+    getSubscribedTopics: vi.fn(() => [...subscribedTopics]),
     getStats: mockGetStats,
     isConsumerRunning: mockIsConsumerRunning,
   }));
@@ -50,6 +62,8 @@ vi.mock('@railrepay/kafka-client', () => {
     __mockConnect: mockConnect,
     __mockDisconnect: mockDisconnect,
     __mockSubscribe: mockSubscribe,
+    __mockStart: mockStart,
+    __mockGetSubscribedTopics: mockGetSubscribedTopics,
     __mockGetStats: mockGetStats,
     __mockIsConsumerRunning: mockIsConsumerRunning,
   };

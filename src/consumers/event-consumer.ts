@@ -180,6 +180,13 @@ export class EventConsumer {
         }
       });
 
+      // Start consuming from all subscribed topics
+      // TD-KAFKA-001: Must call start() after all subscribe() calls (breaking change in v2.0.0)
+      this.logger.info('Starting Kafka consumer for all subscribed topics', {
+        topics: this.kafkaConsumer.getSubscribedTopics(),
+      });
+      await this.kafkaConsumer.start();
+
       this.started = true;
       this.stats.isRunning = true;
     } catch (error) {

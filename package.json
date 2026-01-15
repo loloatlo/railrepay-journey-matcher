@@ -42,7 +42,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
-    "@railrepay/kafka-client": "^1.0.0",
+    "@railrepay/kafka-client": "^2.0.0",
     "@railrepay/metrics-pusher": "^1.1.0",
     "@railrepay/postgres-client": "^1.0.0",
     "@railrepay/winston-logger": "^1.0.0",
