@@ -11,6 +11,7 @@ import { PostgresClient } from '@railrepay/postgres-client';
 import { MetricsPusher, createMetricsRouter } from '@railrepay/metrics-pusher';
 import { randomUUID } from 'crypto';
 import { createJourneysRouter } from './api/journeys.js';
+import { createRoutesRouter } from './api/routes.js';
 import { createHealthRouter } from './api/health.js';
 import { createEventConsumer, EventConsumer } from './consumers/event-consumer.js';
 import { createConsumerConfig, ConsumerConfigError } from './consumers/config.js';
@@ -82,6 +83,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Mount API routes
 app.use('/journeys', createJourneysRouter(db.getPool()));
+app.use('/routes', createRoutesRouter(db.getPool()));
 app.use('/health', createHealthRouter(db.getPool()));
 
 // Metrics endpoint (separate port in production, same port for MVP)
