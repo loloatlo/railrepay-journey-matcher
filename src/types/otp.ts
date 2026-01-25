@@ -5,7 +5,9 @@
 
 export interface OTPPlace {
   name: string;
-  stopId: string; // Format: "1:CRS" (e.g., "1:KGX")
+  stop?: {
+    gtfsId: string; // Format: "1:CRS" (e.g., "1:KGX")
+  };
 }
 
 export interface OTPLeg {
@@ -14,8 +16,12 @@ export interface OTPLeg {
   to: OTPPlace;
   startTime: number; // Unix timestamp in milliseconds
   endTime: number; // Unix timestamp in milliseconds
-  tripId: string; // Maps to RID (Railway Identifier)
-  routeId: string; // Maps to TOC code
+  trip?: {
+    gtfsId: string; // Maps to RID (Railway Identifier)
+  };
+  route?: {
+    gtfsId: string; // Maps to TOC code
+  };
 }
 
 export interface OTPItinerary {

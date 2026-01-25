@@ -94,12 +94,12 @@ describe('OTPClient', () => {
                 legs: [
                   {
                     mode: 'RAIL',
-                    from: { name: 'London Kings Cross', stopId: '1:KGX' },
-                    to: { name: 'York', stopId: '1:YRK' },
+                    from: { name: 'London Kings Cross', stop: { gtfsId: '1:KGX' } },
+                    to: { name: 'York', stop: { gtfsId: '1:YRK' } },
                     startTime: 1706191800000,
                     endTime: 1706200020000,
-                    tripId: '202501251430001',
-                    routeId: 'GR',
+                    trip: { gtfsId: '202501251430001' },
+                    route: { gtfsId: 'GR' },
                   },
                 ],
               },
@@ -127,8 +127,8 @@ describe('OTPClient', () => {
     expect(result.itineraries).toHaveLength(1);
     expect(result.itineraries[0].legs[0]).toMatchObject({
       mode: 'RAIL',
-      tripId: '202501251430001',
-      routeId: 'GR',
+      trip: { gtfsId: '202501251430001' },
+      route: { gtfsId: 'GR' },
     });
 
     // Assert: Verify three GraphQL queries were made

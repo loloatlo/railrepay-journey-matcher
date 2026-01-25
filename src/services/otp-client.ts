@@ -52,12 +52,12 @@ const PLAN_JOURNEY_QUERY = `
         endTime
         legs {
           mode
-          from { name stopId }
-          to { name stopId }
+          from { name stop { gtfsId } }
+          to { name stop { gtfsId } }
           startTime
           endTime
-          tripId
-          routeId
+          trip { gtfsId }
+          route { gtfsId }
         }
       }
     }

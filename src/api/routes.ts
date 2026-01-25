@@ -112,7 +112,7 @@ export function createRoutesRouter(pool: Pool): Router {
           to: leg.to.name,
           departure: formatTime(leg.startTime),
           arrival: formatTime(leg.endTime),
-          operator: extractOperator(leg.routeId || 'Unknown'),
+          operator: extractOperator(leg.route?.gtfsId || 'Unknown'),
         }));
 
         // Calculate total duration
