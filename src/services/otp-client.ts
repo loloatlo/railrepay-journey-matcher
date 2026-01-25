@@ -166,6 +166,12 @@ export class OTPClient {
         { headers }
       );
 
+      // Check for GraphQL errors or malformed response
+      if (!response.data?.data?.plan) {
+        const errorMsg = (response.data as any)?.errors?.[0]?.message || 'Invalid response from OTP';
+        throw new Error(`OTP GraphQL error: ${errorMsg}`);
+      }
+
       const plan = response.data.data.plan;
 
       // Validate response
