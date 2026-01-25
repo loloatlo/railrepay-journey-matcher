@@ -6,14 +6,41 @@
  */
 
 import axios, { AxiosInstance } from 'axios';
-import { OTPQueryVariables, OTPPlanResponse } from '../types/otp.js';
+import {
+  OTPQueryVariables,
+  OTPPlanResponse,
+  OTPStopsResponse,
+  StopCoordinates,
+} from '../types/otp.js';
 
-// GraphQL query for journey planning
+/**
+ * GraphQL query to resolve station name/CRS to coordinates
+ * OTP requires lat/lon for the plan query (not place names)
+ */
+const RESOLVE_STOP_QUERY = `
+  query ResolveStop($name: String!) {
+    stops(name: $name) {
+      gtfsId
+      name
+      lat
+      lon
+    }
+  }
+`;
+
+/**
+ * GraphQL query for journey planning
+ * Uses lat/lon coordinates as required by OTP GraphQL schema
+ */
 const PLAN_JOURNEY_QUERY = `
-  query PlanJourney($from: String!, $to: String!, $date: String!, $time: String!) {
+  query PlanJourney(
+    $fromLat: Float!, $fromLon: Float!,
+    $toLat: Float!, $toLon: Float!,
+    $date: String!, $time: String!
+  ) {
     plan(
-      from: {place: $from}
-      to: {place: $to}
+      from: {lat: $fromLat, lon: $fromLon}
+      to: {lat: $toLat, lon: $toLon}
       date: $date
       time: $time
       transportModes: [{mode: RAIL}]
@@ -50,7 +77,48 @@ export class OTPClient {
   }
 
   /**
+   * Resolve a station name or CRS code to lat/lon coordinates
+   * Uses OTP's stops(name: ...) query to look up station coordinates
+   *
+   * @param stationName - Station name or CRS code (e.g., "Abergavenny", "AGV")
+   * @returns Coordinates with lat/lon
+   * @throws Error if station not found in GTFS data
+   */
+  async resolveStopCoordinates(stationName: string): Promise<StopCoordinates> {
+    try {
+      const response = await this.axiosClient.post<OTPStopsResponse>('', {
+        query: RESOLVE_STOP_QUERY,
+        variables: { name: stationName },
+      });
+
+      // Check for GraphQL errors
+      if (response.data.errors?.length) {
+        throw new Error(
+          `OTP GraphQL error resolving station "${stationName}": ${response.data.errors[0].message}`
+        );
+      }
+
+      const stops = response.data.data?.stops;
+      if (!stops || stops.length === 0) {
+        throw new Error(`Station not found: ${stationName}`);
+      }
+
+      // Return first matching stop's coordinates
+      return { lat: stops[0].lat, lon: stops[0].lon };
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+          throw new Error(`OTP service timeout resolving station: ${error.message}`);
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Plan a journey using OTP GraphQL API
+   *
+   * Resolves station names/CRS codes to coordinates, then queries OTP for routes.
    *
    * @param variables - Journey query parameters (from, to, date, time)
    * @param correlationId - Optional correlation ID for distributed tracing (ADR-002)
@@ -71,12 +139,26 @@ export class OTPClient {
         headers['X-Correlation-ID'] = correlationId;
       }
 
-      // Execute GraphQL query
+      // Step 1: Resolve station names/CRS codes to lat/lon coordinates
+      // OTP GraphQL plan query requires {lat, lon} not {place}
+      const [fromCoords, toCoords] = await Promise.all([
+        this.resolveStopCoordinates(variables.from),
+        this.resolveStopCoordinates(variables.to),
+      ]);
+
+      // Step 2: Execute GraphQL plan query with coordinates
       const response = await this.axiosClient.post<OTPPlanResponse>(
         '', // POST to baseURL
         {
           query: PLAN_JOURNEY_QUERY,
-          variables,
+          variables: {
+            fromLat: fromCoords.lat,
+            fromLon: fromCoords.lon,
+            toLat: toCoords.lat,
+            toLon: toCoords.lon,
+            date: variables.date,
+            time: variables.time,
+          },
         },
         { headers }
       );

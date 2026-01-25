@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OTPClient } from '../../../src/services/otp-client.js';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 
 // Mock axios
 vi.mock('axios');
@@ -30,11 +30,23 @@ describe('OTPClient', () => {
   const mockOtpUrl = 'http://test-otp-router:8080/otp/routers/default/index/graphql';
 
   beforeEach(() => {
+    // Clear only the axios instance mocks, not all mocks (to preserve Error prototypes)
+    mockAxiosInstance.post.mockClear();
+    mockAxiosInstance.get.mockClear();
+    mockAxiosInstance.put.mockClear();
+    mockAxiosInstance.delete.mockClear();
+    mockAxiosInstance.patch.mockClear();
+    mockAxiosInstance.request.mockClear();
+
     // Mock axios.create to return our mock instance
     mockedAxios.create.mockReturnValue(mockAxiosInstance as any);
 
+    // Mock axios.isAxiosError to detect AxiosError instances
+    mockedAxios.isAxiosError.mockImplementation((error: any) => {
+      return error instanceof AxiosError || error?.isAxiosError === true;
+    });
+
     otpClient = new OTPClient(mockOtpUrl);
-    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -42,8 +54,40 @@ describe('OTPClient', () => {
   });
 
   it('should plan a journey and return itineraries', async () => {
-    // Arrange: Mock OTP GraphQL response
-    const mockOTPResponse = {
+    // Arrange: Mock stops query for "from" station (1:KGX)
+    const mockFromStopResponse = {
+      data: {
+        data: {
+          stops: [
+            {
+              gtfsId: '1:KGX',
+              name: 'London Kings Cross',
+              lat: 51.5308,
+              lon: -0.1238,
+            },
+          ],
+        },
+      },
+    };
+
+    // Mock stops query for "to" station (1:YRK)
+    const mockToStopResponse = {
+      data: {
+        data: {
+          stops: [
+            {
+              gtfsId: '1:YRK',
+              name: 'York',
+              lat: 53.9583,
+              lon: -1.0803,
+            },
+          ],
+        },
+      },
+    };
+
+    // Mock plan query response
+    const mockPlanResponse = {
       data: {
         data: {
           plan: {
@@ -69,7 +113,11 @@ describe('OTPClient', () => {
       },
     };
 
-    mockAxiosInstance.post.mockResolvedValue(mockOTPResponse);
+    // Mock axios calls in sequence: from stop, to stop, then plan
+    mockAxiosInstance.post
+      .mockResolvedValueOnce(mockFromStopResponse)
+      .mockResolvedValueOnce(mockToStopResponse)
+      .mockResolvedValueOnce(mockPlanResponse);
 
     // Act: Plan journey
     const result = await otpClient.planJourney({
@@ -87,19 +135,98 @@ describe('OTPClient', () => {
       routeId: 'GR',
     });
 
-    // Assert: Verify GraphQL query was called
-    expect(mockAxiosInstance.post).toHaveBeenCalledWith(
-      '', // Empty string because we POST to baseURL
+    // Assert: Verify three GraphQL queries were made
+    expect(mockAxiosInstance.post).toHaveBeenCalledTimes(3);
+
+    // First call: resolve "from" station coordinates
+    expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
+      1,
+      '',
+      expect.objectContaining({
+        query: expect.stringContaining('query ResolveStop'),
+        variables: { name: '1:KGX' },
+      })
+    );
+
+    // Second call: resolve "to" station coordinates
+    expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
+      2,
+      '',
+      expect.objectContaining({
+        query: expect.stringContaining('query ResolveStop'),
+        variables: { name: '1:YRK' },
+      })
+    );
+
+    // Third call: plan journey with coordinates
+    expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
+      3,
+      '',
       expect.objectContaining({
         query: expect.stringContaining('query PlanJourney'),
         variables: {
-          from: '1:KGX',
-          to: '1:YRK',
+          fromLat: 51.5308,
+          fromLon: -0.1238,
+          toLat: 53.9583,
+          toLon: -1.0803,
           date: '2025-01-25',
           time: '14:30',
         },
       }),
       expect.any(Object)
+    );
+  });
+
+  it('should resolve station name to coordinates', async () => {
+    // Arrange: Mock stops query response
+    const mockStopResponse = {
+      data: {
+        data: {
+          stops: [
+            {
+              gtfsId: '1:KGX',
+              name: 'London Kings Cross',
+              lat: 51.5308,
+              lon: -0.1238,
+            },
+          ],
+        },
+      },
+    };
+
+    mockAxiosInstance.post.mockResolvedValueOnce(mockStopResponse);
+
+    // Act: Resolve coordinates
+    const coords = await otpClient.resolveStopCoordinates('London Kings Cross');
+
+    // Assert: Should return lat/lon
+    expect(coords).toEqual({ lat: 51.5308, lon: -0.1238 });
+
+    // Assert: Verify query was made
+    expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+      '',
+      expect.objectContaining({
+        query: expect.stringContaining('query ResolveStop'),
+        variables: { name: 'London Kings Cross' },
+      })
+    );
+  });
+
+  it('should handle station not found', async () => {
+    // Arrange: Mock empty stops response
+    const mockEmptyResponse = {
+      data: {
+        data: {
+          stops: [],
+        },
+      },
+    };
+
+    mockAxiosInstance.post.mockResolvedValueOnce(mockEmptyResponse);
+
+    // Act & Assert: Should throw error
+    await expect(otpClient.resolveStopCoordinates('NonexistentStation')).rejects.toThrow(
+      'Station not found: NonexistentStation'
     );
   });
 
@@ -115,8 +242,24 @@ describe('OTPClient', () => {
   });
 
   it('should handle OTP returning empty itineraries (no routes found)', async () => {
-    // Arrange: OTP returns no routes
-    const mockEmptyResponse = {
+    // Arrange: Mock successful stop resolution but empty plan
+    const mockFromStopResponse = {
+      data: {
+        data: {
+          stops: [{ gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 }],
+        },
+      },
+    };
+
+    const mockToStopResponse = {
+      data: {
+        data: {
+          stops: [{ gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 }],
+        },
+      },
+    };
+
+    const mockEmptyPlanResponse = {
       data: {
         data: {
           plan: {
@@ -126,7 +269,10 @@ describe('OTPClient', () => {
       },
     };
 
-    mockAxiosInstance.post.mockResolvedValue(mockEmptyResponse);
+    mockAxiosInstance.post
+      .mockResolvedValueOnce(mockFromStopResponse)
+      .mockResolvedValueOnce(mockToStopResponse)
+      .mockResolvedValueOnce(mockEmptyPlanResponse);
 
     // Act & Assert: Should throw error
     await expect(
@@ -140,8 +286,18 @@ describe('OTPClient', () => {
   });
 
   it('should handle OTP service timeout', async () => {
-    // Arrange: Simulate network timeout
-    mockAxiosInstance.post.mockRejectedValue(new Error('timeout of 5000ms exceeded'));
+    // Arrange: Simulate network timeout on first stop resolution
+    const timeoutError = new AxiosError(
+      'timeout of 5000ms exceeded',
+      'ECONNABORTED',
+      undefined,
+      undefined,
+      undefined
+    );
+    timeoutError.code = 'ECONNABORTED';
+    timeoutError.isAxiosError = true;
+
+    mockAxiosInstance.post.mockRejectedValue(timeoutError);
 
     // Act & Assert: Should throw meaningful error
     await expect(
@@ -151,14 +307,40 @@ describe('OTPClient', () => {
         date: '2025-01-25',
         time: '14:30',
       })
-    ).rejects.toThrow('timeout');
+    ).rejects.toThrow('OTP service timeout resolving station');
   });
 
   it('should handle OTP service returning 500 error', async () => {
-    // Arrange: Simulate 500 error
-    const error = new Error('Request failed with status code 500');
-    (error as any).response = { status: 500 };
-    mockAxiosInstance.post.mockRejectedValue(error);
+    // Arrange: Mock successful stop resolutions but 500 error on plan query
+    const mockFromStopResponse = {
+      data: {
+        data: {
+          stops: [{ gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 }],
+        },
+      },
+    };
+
+    const mockToStopResponse = {
+      data: {
+        data: {
+          stops: [{ gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 }],
+        },
+      },
+    };
+
+    // Create error object that axios.isAxiosError will recognize
+    const error = Object.assign(new Error('Request failed with status code 500'), {
+      isAxiosError: true,
+      response: { status: 500, data: null, statusText: 'Internal Server Error', headers: {} },
+      config: {},
+      code: '500',
+      toJSON: () => ({}),
+    });
+
+    mockAxiosInstance.post
+      .mockResolvedValueOnce(mockFromStopResponse)
+      .mockResolvedValueOnce(mockToStopResponse)
+      .mockRejectedValueOnce(error);
 
     // Act & Assert
     await expect(
@@ -168,12 +350,28 @@ describe('OTPClient', () => {
         date: '2025-01-25',
         time: '14:30',
       })
-    ).rejects.toThrow();
+    ).rejects.toThrow('OTP service returned 500 error');
   });
 
   it('should include correlation ID in request headers', async () => {
-    // Arrange
-    const mockResponse = {
+    // Arrange: Mock stop resolutions and plan query
+    const mockFromStopResponse = {
+      data: {
+        data: {
+          stops: [{ gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 }],
+        },
+      },
+    };
+
+    const mockToStopResponse = {
+      data: {
+        data: {
+          stops: [{ gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 }],
+        },
+      },
+    };
+
+    const mockPlanResponse = {
       data: {
         data: {
           plan: {
@@ -189,7 +387,10 @@ describe('OTPClient', () => {
       },
     };
 
-    mockAxiosInstance.post.mockResolvedValue(mockResponse);
+    mockAxiosInstance.post
+      .mockResolvedValueOnce(mockFromStopResponse)
+      .mockResolvedValueOnce(mockToStopResponse)
+      .mockResolvedValueOnce(mockPlanResponse);
 
     const correlationId = 'test-correlation-id-123';
 
@@ -204,8 +405,9 @@ describe('OTPClient', () => {
       correlationId
     );
 
-    // Assert: Verify correlation ID in headers
-    expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+    // Assert: Verify correlation ID in headers for plan query (3rd call)
+    expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
+      3,
       expect.any(String),
       expect.any(Object),
       expect.objectContaining({

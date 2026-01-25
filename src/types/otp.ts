@@ -33,8 +33,39 @@ export interface OTPPlanResponse {
 }
 
 export interface OTPQueryVariables {
-  from: string; // Format: "1:CRS" (e.g., "1:KGX")
-  to: string;   // Format: "1:CRS" (e.g., "1:YRK")
+  from: string; // CRS code (e.g., "KGX") or station name
+  to: string;   // CRS code (e.g., "YRK") or station name
   date: string; // ISO date string (YYYY-MM-DD)
   time: string; // HH:mm format
+}
+
+/**
+ * Coordinates for OTP location input
+ * OTP requires lat/lon for the plan query (not place names)
+ */
+export interface StopCoordinates {
+  lat: number;
+  lon: number;
+}
+
+/**
+ * OTP stop info returned by stops(name: ...) query
+ */
+export interface OTPStop {
+  gtfsId: string;  // Format: "1:CRS" (e.g., "1:KGX")
+  name: string;
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Response from OTP stops query
+ */
+export interface OTPStopsResponse {
+  data: {
+    stops: OTPStop[];
+  };
+  errors?: Array<{
+    message: string;
+  }>;
 }
