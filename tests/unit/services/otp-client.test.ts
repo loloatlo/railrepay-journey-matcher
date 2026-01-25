@@ -54,34 +54,30 @@ describe('OTPClient', () => {
   });
 
   it('should plan a journey and return itineraries', async () => {
-    // Arrange: Mock stops query for "from" station (1:KGX)
+    // Arrange: Mock stop query for "from" station (1:KGX) - singular stop response
     const mockFromStopResponse = {
       data: {
         data: {
-          stops: [
-            {
-              gtfsId: '1:KGX',
-              name: 'London Kings Cross',
-              lat: 51.5308,
-              lon: -0.1238,
-            },
-          ],
+          stop: {
+            gtfsId: '1:KGX',
+            name: 'London Kings Cross',
+            lat: 51.5308,
+            lon: -0.1238,
+          },
         },
       },
     };
 
-    // Mock stops query for "to" station (1:YRK)
+    // Mock stop query for "to" station (1:YRK) - singular stop response
     const mockToStopResponse = {
       data: {
         data: {
-          stops: [
-            {
-              gtfsId: '1:YRK',
-              name: 'York',
-              lat: 53.9583,
-              lon: -1.0803,
-            },
-          ],
+          stop: {
+            gtfsId: '1:YRK',
+            name: 'York',
+            lat: 53.9583,
+            lon: -1.0803,
+          },
         },
       },
     };
@@ -119,10 +115,10 @@ describe('OTPClient', () => {
       .mockResolvedValueOnce(mockToStopResponse)
       .mockResolvedValueOnce(mockPlanResponse);
 
-    // Act: Plan journey
+    // Act: Plan journey (passing CRS codes - method will prepend "1:")
     const result = await otpClient.planJourney({
-      from: '1:KGX',
-      to: '1:YRK',
+      from: 'KGX',
+      to: 'YRK',
       date: '2025-01-25',
       time: '14:30',
     });
@@ -138,23 +134,23 @@ describe('OTPClient', () => {
     // Assert: Verify three GraphQL queries were made
     expect(mockAxiosInstance.post).toHaveBeenCalledTimes(3);
 
-    // First call: resolve "from" station coordinates
+    // First call: resolve "from" station coordinates with gtfsId format
     expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
       1,
       '',
       expect.objectContaining({
         query: expect.stringContaining('query ResolveStop'),
-        variables: { name: '1:KGX' },
+        variables: { id: '1:KGX' },
       })
     );
 
-    // Second call: resolve "to" station coordinates
+    // Second call: resolve "to" station coordinates with gtfsId format
     expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
       2,
       '',
       expect.objectContaining({
         query: expect.stringContaining('query ResolveStop'),
-        variables: { name: '1:YRK' },
+        variables: { id: '1:YRK' },
       })
     );
 
@@ -177,56 +173,54 @@ describe('OTPClient', () => {
     );
   });
 
-  it('should resolve station name to coordinates', async () => {
-    // Arrange: Mock stops query response
+  it('should resolve CRS code to coordinates', async () => {
+    // Arrange: Mock stop query response (singular)
     const mockStopResponse = {
       data: {
         data: {
-          stops: [
-            {
-              gtfsId: '1:KGX',
-              name: 'London Kings Cross',
-              lat: 51.5308,
-              lon: -0.1238,
-            },
-          ],
+          stop: {
+            gtfsId: '1:KGX',
+            name: 'London Kings Cross',
+            lat: 51.5308,
+            lon: -0.1238,
+          },
         },
       },
     };
 
     mockAxiosInstance.post.mockResolvedValueOnce(mockStopResponse);
 
-    // Act: Resolve coordinates
-    const coords = await otpClient.resolveStopCoordinates('London Kings Cross');
+    // Act: Resolve coordinates (passing CRS code - method prepends "1:")
+    const coords = await otpClient.resolveStopCoordinates('KGX');
 
     // Assert: Should return lat/lon
     expect(coords).toEqual({ lat: 51.5308, lon: -0.1238 });
 
-    // Assert: Verify query was made
+    // Assert: Verify query was made with gtfsId format
     expect(mockAxiosInstance.post).toHaveBeenCalledWith(
       '',
       expect.objectContaining({
         query: expect.stringContaining('query ResolveStop'),
-        variables: { name: 'London Kings Cross' },
+        variables: { id: '1:KGX' },
       })
     );
   });
 
   it('should handle station not found', async () => {
-    // Arrange: Mock empty stops response
+    // Arrange: Mock null stop response (station doesn't exist)
     const mockEmptyResponse = {
       data: {
         data: {
-          stops: [],
+          stop: null,
         },
       },
     };
 
     mockAxiosInstance.post.mockResolvedValueOnce(mockEmptyResponse);
 
-    // Act & Assert: Should throw error
-    await expect(otpClient.resolveStopCoordinates('NonexistentStation')).rejects.toThrow(
-      'Station not found: NonexistentStation'
+    // Act & Assert: Should throw error with CRS code
+    await expect(otpClient.resolveStopCoordinates('XXX')).rejects.toThrow(
+      'Station not found: XXX'
     );
   });
 
@@ -242,11 +236,11 @@ describe('OTPClient', () => {
   });
 
   it('should handle OTP returning empty itineraries (no routes found)', async () => {
-    // Arrange: Mock successful stop resolution but empty plan
+    // Arrange: Mock successful stop resolution but empty plan (singular stop responses)
     const mockFromStopResponse = {
       data: {
         data: {
-          stops: [{ gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 }],
+          stop: { gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 },
         },
       },
     };
@@ -254,7 +248,7 @@ describe('OTPClient', () => {
     const mockToStopResponse = {
       data: {
         data: {
-          stops: [{ gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 }],
+          stop: { gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 },
         },
       },
     };
@@ -274,11 +268,11 @@ describe('OTPClient', () => {
       .mockResolvedValueOnce(mockToStopResponse)
       .mockResolvedValueOnce(mockEmptyPlanResponse);
 
-    // Act & Assert: Should throw error
+    // Act & Assert: Should throw error (passing CRS codes)
     await expect(
       otpClient.planJourney({
-        from: '1:KGX',
-        to: '1:YRK',
+        from: 'KGX',
+        to: 'YRK',
         date: '2025-01-25',
         time: '14:30',
       })
@@ -299,11 +293,11 @@ describe('OTPClient', () => {
 
     mockAxiosInstance.post.mockRejectedValue(timeoutError);
 
-    // Act & Assert: Should throw meaningful error
+    // Act & Assert: Should throw meaningful error (passing CRS codes)
     await expect(
       otpClient.planJourney({
-        from: '1:KGX',
-        to: '1:YRK',
+        from: 'KGX',
+        to: 'YRK',
         date: '2025-01-25',
         time: '14:30',
       })
@@ -311,11 +305,11 @@ describe('OTPClient', () => {
   });
 
   it('should handle OTP service returning 500 error', async () => {
-    // Arrange: Mock successful stop resolutions but 500 error on plan query
+    // Arrange: Mock successful stop resolutions but 500 error on plan query (singular stop responses)
     const mockFromStopResponse = {
       data: {
         data: {
-          stops: [{ gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 }],
+          stop: { gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 },
         },
       },
     };
@@ -323,7 +317,7 @@ describe('OTPClient', () => {
     const mockToStopResponse = {
       data: {
         data: {
-          stops: [{ gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 }],
+          stop: { gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 },
         },
       },
     };
@@ -342,11 +336,11 @@ describe('OTPClient', () => {
       .mockResolvedValueOnce(mockToStopResponse)
       .mockRejectedValueOnce(error);
 
-    // Act & Assert
+    // Act & Assert (passing CRS codes)
     await expect(
       otpClient.planJourney({
-        from: '1:KGX',
-        to: '1:YRK',
+        from: 'KGX',
+        to: 'YRK',
         date: '2025-01-25',
         time: '14:30',
       })
@@ -354,11 +348,11 @@ describe('OTPClient', () => {
   });
 
   it('should include correlation ID in request headers', async () => {
-    // Arrange: Mock stop resolutions and plan query
+    // Arrange: Mock stop resolutions and plan query (singular stop responses)
     const mockFromStopResponse = {
       data: {
         data: {
-          stops: [{ gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 }],
+          stop: { gtfsId: '1:KGX', name: 'London Kings Cross', lat: 51.5308, lon: -0.1238 },
         },
       },
     };
@@ -366,7 +360,7 @@ describe('OTPClient', () => {
     const mockToStopResponse = {
       data: {
         data: {
-          stops: [{ gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 }],
+          stop: { gtfsId: '1:YRK', name: 'York', lat: 53.9583, lon: -1.0803 },
         },
       },
     };
@@ -394,11 +388,11 @@ describe('OTPClient', () => {
 
     const correlationId = 'test-correlation-id-123';
 
-    // Act
+    // Act (passing CRS codes)
     await otpClient.planJourney(
       {
-        from: '1:KGX',
-        to: '1:YRK',
+        from: 'KGX',
+        to: 'YRK',
         date: '2025-01-25',
         time: '14:30',
       },

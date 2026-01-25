@@ -9,17 +9,18 @@ import axios, { AxiosInstance } from 'axios';
 import {
   OTPQueryVariables,
   OTPPlanResponse,
-  OTPStopsResponse,
+  OTPStopResponse,
   StopCoordinates,
 } from '../types/otp.js';
 
 /**
- * GraphQL query to resolve station name/CRS to coordinates
+ * GraphQL query to resolve CRS code to coordinates
+ * Uses stop(id:) for exact gtfsId lookup (format: "1:CRS")
  * OTP requires lat/lon for the plan query (not place names)
  */
 const RESOLVE_STOP_QUERY = `
-  query ResolveStop($name: String!) {
-    stops(name: $name) {
+  query ResolveStop($id: String!) {
+    stop(id: $id) {
       gtfsId
       name
       lat
@@ -77,34 +78,36 @@ export class OTPClient {
   }
 
   /**
-   * Resolve a station name or CRS code to lat/lon coordinates
-   * Uses OTP's stops(name: ...) query to look up station coordinates
+   * Resolve a CRS code to lat/lon coordinates
+   * Uses OTP's stop(id: ...) query for exact gtfsId lookup
    *
-   * @param stationName - Station name or CRS code (e.g., "Abergavenny", "AGV")
+   * @param crsCode - CRS code (e.g., "AGV", "KGX")
    * @returns Coordinates with lat/lon
    * @throws Error if station not found in GTFS data
    */
-  async resolveStopCoordinates(stationName: string): Promise<StopCoordinates> {
+  async resolveStopCoordinates(crsCode: string): Promise<StopCoordinates> {
     try {
-      const response = await this.axiosClient.post<OTPStopsResponse>('', {
+      // Convert CRS code to OTP gtfsId format: "1:CRS"
+      const gtfsId = `1:${crsCode}`;
+
+      const response = await this.axiosClient.post<OTPStopResponse>('', {
         query: RESOLVE_STOP_QUERY,
-        variables: { name: stationName },
+        variables: { id: gtfsId },
       });
 
       // Check for GraphQL errors
       if (response.data.errors?.length) {
         throw new Error(
-          `OTP GraphQL error resolving station "${stationName}": ${response.data.errors[0].message}`
+          `OTP GraphQL error resolving station "${crsCode}": ${response.data.errors[0].message}`
         );
       }
 
-      const stops = response.data.data?.stops;
-      if (!stops || stops.length === 0) {
-        throw new Error(`Station not found: ${stationName}`);
+      const stop = response.data.data?.stop;
+      if (!stop) {
+        throw new Error(`Station not found: ${crsCode}`);
       }
 
-      // Return first matching stop's coordinates
-      return { lat: stops[0].lat, lon: stops[0].lon };
+      return { lat: stop.lat, lon: stop.lon };
     } catch (error) {
       if (axios.isAxiosError(error)) {
         if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {

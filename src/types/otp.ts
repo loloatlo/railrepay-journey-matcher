@@ -59,11 +59,24 @@ export interface OTPStop {
 }
 
 /**
- * Response from OTP stops query
+ * Response from OTP stops query (plural - fuzzy name search)
  */
 export interface OTPStopsResponse {
   data: {
     stops: OTPStop[];
+  };
+  errors?: Array<{
+    message: string;
+  }>;
+}
+
+/**
+ * Response from OTP stop(id: ...) query (singular - exact gtfsId lookup)
+ * Used for resolving CRS codes to coordinates
+ */
+export interface OTPStopResponse {
+  data: {
+    stop: OTPStop | null;
   };
   errors?: Array<{
     message: string;
