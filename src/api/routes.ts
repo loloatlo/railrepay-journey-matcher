@@ -51,7 +51,9 @@ export function createRoutesRouter(pool: Pool): Router {
    *           "operator": "LNER"
    *         }
    *       ],
-   *       "totalDuration": "4h 30m"
+   *       "totalDuration": "4h 30m",
+   *       "isDirect": true,
+   *       "interchangeStation": null
    *     }
    *   ]
    * }
@@ -117,9 +119,15 @@ export function createRoutesRouter(pool: Pool): Router {
         const durationMs = itinerary.endTime - itinerary.startTime;
         const totalDuration = formatDuration(durationMs);
 
+        // Determine if route is direct or requires interchange
+        const isDirect = legs.length === 1;
+        const interchangeStation = !isDirect && legs.length > 1 ? legs[0].to : undefined;
+
         return {
           legs,
           totalDuration,
+          isDirect,
+          interchangeStation,
         };
       });
 

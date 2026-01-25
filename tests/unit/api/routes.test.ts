@@ -43,7 +43,6 @@ vi.mock('../../../src/services/otp-client.js', () => ({
   })),
 }));
 
-// @ts-expect-error - Router does not exist yet, Blake will create in src/api/routes.ts
 import { createRoutesRouter } from '../../../src/api/routes.js';
 
 describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
@@ -68,7 +67,6 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
       next();
     });
 
-    // @ts-expect-error - Function does not exist yet
     app.use('/routes', createRoutesRouter(mockPool));
 
     // Clear all mocks
@@ -438,7 +436,6 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
 
       // Attempt to import router (should fail during initialization)
       await expect(async () => {
-        // @ts-expect-error - Function does not exist yet
         const router = createRoutesRouter(mockPool);
       }).rejects.toThrow(/OTP_ROUTER_URL/);
     });
