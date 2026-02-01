@@ -16,6 +16,7 @@ export interface OTPLeg {
   to: OTPPlace;
   startTime: number; // Unix timestamp in milliseconds
   endTime: number; // Unix timestamp in milliseconds
+  distance?: number; // Metres (OTP format) - REQUIRED for detour calculation (TD-JOURNEY-012)
   trip?: {
     gtfsId: string; // Maps to RID (Railway Identifier)
   };
@@ -28,6 +29,8 @@ export interface OTPItinerary {
   startTime: number;
   endTime: number;
   legs: OTPLeg[];
+  duration?: number; // Optional: can be derived from startTime/endTime
+  generalizedCost?: number; // Optional: OTP internal cost
 }
 
 export interface OTPPlanResponse {
@@ -87,4 +90,31 @@ export interface OTPStopResponse {
   errors?: Array<{
     message: string;
   }>;
+}
+
+/**
+ * TD-JOURNEY-012: Corridor-based route scoring interfaces
+ * Per RE-JOURNEY-001 research specification
+ */
+
+/**
+ * Corridor score breakdown
+ */
+export interface CorridorScore {
+  corridor: string; // Corridor identifier
+  score: number; // Total score in minutes
+  duration: number; // Journey duration in minutes
+  detourPenalty: number; // Detour penalty in minutes
+  transferPenalty: number; // Transfer penalty in minutes
+  detourRatio: number; // Route distance / straight-line distance
+  routeDistanceKm: number; // Actual route distance
+  transferCount: number; // Number of transfers
+}
+
+/**
+ * Scored route combining itinerary and score
+ */
+export interface ScoredRoute {
+  itinerary: OTPItinerary;
+  corridorScore: CorridorScore;
 }

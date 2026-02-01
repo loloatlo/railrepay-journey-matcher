@@ -84,7 +84,10 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
       // that calls otp-router GraphQL API and returns itineraries
 
       // Configure shared mock directly (per Section 6.1.11)
+      // TD-JOURNEY-012: Add fromCoords and toCoords for corridor-based reranking
       sharedPlanJourney.mockResolvedValue({
+        fromCoords: { lat: 51.5309, lon: -0.1239 }, // London Kings Cross
+        toCoords: { lat: 55.9521, lon: -3.1889 }, // Edinburgh Waverley
         itineraries: [
           {
             startTime: 1640000000000,
@@ -96,6 +99,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'Edinburgh Waverley', stop: { gtfsId: '1:EDB' } },
                 startTime: 1640000000000,
                 endTime: 1640016000000,
+                distance: 534000, // 534 km (approximate rail distance)
                 trip: { gtfsId: 'trip-1' },
                 route: { gtfsId: 'route-1' },
               },
@@ -111,6 +115,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'York', stop: { gtfsId: '1:YRK' } },
                 startTime: 1640003600000,
                 endTime: 1640010000000,
+                distance: 303000, // 303 km
                 trip: { gtfsId: 'trip-2a' },
                 route: { gtfsId: 'route-2a' },
               },
@@ -120,6 +125,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'Edinburgh Waverley', stop: { gtfsId: '1:EDB' } },
                 startTime: 1640012000000,
                 endTime: 1640019600000,
+                distance: 231000, // 231 km (total: 534 km)
                 trip: { gtfsId: 'trip-2b' },
                 route: { gtfsId: 'route-2b' },
               },
@@ -135,6 +141,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'Newcastle', stop: { gtfsId: '1:NCL' } },
                 startTime: 1640007200000,
                 endTime: 1640017200000,
+                distance: 451000, // 451 km
                 trip: { gtfsId: 'trip-3a' },
                 route: { gtfsId: 'route-3a' },
               },
@@ -144,6 +151,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'Edinburgh Waverley', stop: { gtfsId: '1:EDB' } },
                 startTime: 1640019000000,
                 endTime: 1640023200000,
+                distance: 183000, // 183 km (total: 634 km - more circuitous)
                 trip: { gtfsId: 'trip-3b' },
                 route: { gtfsId: 'route-3b' },
               },
@@ -193,7 +201,10 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
       // OTP already returns routes in ranked order by total duration
 
       // Configure shared mock directly (per Section 6.1.11)
+      // TD-JOURNEY-012: Add fromCoords and toCoords for corridor-based reranking
       sharedPlanJourney.mockResolvedValue({
+        fromCoords: { lat: 51.5154, lon: -0.1755 }, // London Paddington
+        toCoords: { lat: 51.4816, lon: -3.1791 }, // Cardiff Central
         itineraries: [
           {
             startTime: 1640000000000,
@@ -205,6 +216,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
                 startTime: 1640000000000,
                 endTime: 1640016000000,
+                distance: 229000, // 229 km (direct)
                 trip: { gtfsId: 'trip-1' },
                 route: { gtfsId: 'route-1' },
               },
@@ -220,6 +232,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'Bristol Temple Meads', stop: { gtfsId: '1:BRI' } },
                 startTime: 1640003600000,
                 endTime: 1640010000000,
+                distance: 172000, // 172 km
                 trip: { gtfsId: 'trip-2a' },
                 route: { gtfsId: 'route-2a' },
               },
@@ -229,6 +242,7 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
                 to: { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
                 startTime: 1640012000000,
                 endTime: 1640023200000,
+                distance: 70000, // 70 km (total: 242 km - slightly longer)
                 trip: { gtfsId: 'trip-2b' },
                 route: { gtfsId: 'route-2b' },
               },

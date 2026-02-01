@@ -11,6 +11,10 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { createLogger } from '@railrepay/winston-logger';
 import { OTPClient } from '../services/otp-client.js';
+import {
+  rerankRoutesByCorridorScore,
+  calculateHaversineDistance,
+} from '../utils/route-scoring.js';
 
 /**
  * Create router for /routes endpoint
@@ -104,8 +108,25 @@ export function createRoutesRouter(pool: Pool): Router {
         correlationId
       );
 
-      // Transform OTP response to API contract format (AC-1)
-      const routes = otpResponse.itineraries.map((itinerary) => {
+      // TD-JOURNEY-012: Calculate straight-line distance for corridor-based reranking
+      const straightLineDistanceKm = calculateHaversineDistance(
+        otpResponse.fromCoords.lat,
+        otpResponse.fromCoords.lon,
+        otpResponse.toCoords.lat,
+        otpResponse.toCoords.lon
+      );
+
+      // TD-JOURNEY-012: Rerank routes by corridor score
+      // Groups by corridor (interchange + route IDs), selects best per corridor, ranks by score
+      const rankedRoutes = rerankRoutesByCorridorScore(
+        otpResponse.itineraries,
+        straightLineDistanceKm
+        // Uses default constants: DETOUR_THRESHOLD=1.2, DETOUR_WEIGHT_MIN=20, TRANSFER_PENALTY_MIN=15
+      );
+
+      // Transform top N routes (1 per corridor) to API contract format (AC-1)
+      // Limit to top 3 corridors for API response
+      const routes = rankedRoutes.slice(0, 3).map(({ itinerary, corridorScore }) => {
         // Transform legs
         const legs = itinerary.legs.map((leg) => ({
           from: leg.from.name,
@@ -131,9 +152,10 @@ export function createRoutesRouter(pool: Pool): Router {
         };
       });
 
-      logger.info('Routes fetched successfully', {
+      logger.info('Routes fetched and reranked successfully', {
         correlationId,
         routeCount: routes.length,
+        straightLineDistanceKm: straightLineDistanceKm.toFixed(1),
       });
 
       return res.status(200).json({ routes });

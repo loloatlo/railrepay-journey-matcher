@@ -32,6 +32,9 @@ const RESOLVE_STOP_QUERY = `
 /**
  * GraphQL query for journey planning
  * Uses lat/lon coordinates as required by OTP GraphQL schema
+ *
+ * TD-JOURNEY-012: Updated to include distance, duration, generalizedCost
+ * for corridor-based reranking algorithm
  */
 const PLAN_JOURNEY_QUERY = `
   query PlanJourney(
@@ -45,17 +48,20 @@ const PLAN_JOURNEY_QUERY = `
       date: $date
       time: $time
       transportModes: [{mode: RAIL}]
-      numItineraries: 3
+      numItineraries: 8
     ) {
       itineraries {
         startTime
         endTime
+        duration
+        generalizedCost
         legs {
           mode
           from { name stop { gtfsId } }
           to { name stop { gtfsId } }
           startTime
           endTime
+          distance
           trip { gtfsId }
           route { gtfsId }
         }
@@ -125,13 +131,13 @@ export class OTPClient {
    *
    * @param variables - Journey query parameters (from, to, date, time)
    * @param correlationId - Optional correlation ID for distributed tracing (ADR-002)
-   * @returns OTP plan response with itineraries
+   * @returns OTP plan response with itineraries and coordinate metadata
    * @throws Error if OTP returns no routes or service fails
    */
   async planJourney(
     variables: OTPQueryVariables,
     correlationId?: string
-  ): Promise<OTPPlanResponse['data']['plan']> {
+  ): Promise<OTPPlanResponse['data']['plan'] & { fromCoords: StopCoordinates; toCoords: StopCoordinates }> {
     try {
       // Build request with correlation ID header if provided
       const headers: Record<string, string> = {
@@ -179,7 +185,12 @@ export class OTPClient {
         throw new Error('No routes found for specified date/time');
       }
 
-      return plan;
+      // TD-JOURNEY-012: Return plan with coordinates for reranking algorithm
+      return {
+        ...plan,
+        fromCoords,
+        toCoords,
+      };
     } catch (error) {
       // Re-throw with context
       if (axios.isAxiosError(error)) {
