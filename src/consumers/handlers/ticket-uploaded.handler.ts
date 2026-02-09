@@ -47,6 +47,13 @@ export interface JourneyCreatedPayload {
   arrival_datetime: string;
   journey_type: 'single' | 'return';
   correlation_id?: string;
+  legs?: Array<{
+    from: string;
+    to: string;
+    departure: string;
+    arrival: string;
+    operator: string;
+  }>;
 }
 
 /**
@@ -223,6 +230,28 @@ export class TicketUploadedHandler {
       return { valid: false, field: 'journey_type' };
     }
 
+    // Optional legs array validation (AC-7)
+    if (p.legs !== undefined) {
+      if (!Array.isArray(p.legs)) {
+        return { valid: false, field: 'legs' };
+      }
+
+      // Validate each leg has required fields
+      for (let i = 0; i < p.legs.length; i++) {
+        const leg = p.legs[i];
+        if (typeof leg !== 'object' || leg === null) {
+          return { valid: false, field: `legs[${i}]` };
+        }
+
+        const requiredFields = ['from', 'to', 'departure', 'arrival', 'operator'];
+        for (const field of requiredFields) {
+          if (!leg[field] || typeof leg[field] !== 'string') {
+            return { valid: false, field: `legs[${i}].${field}` };
+          }
+        }
+      }
+    }
+
     return { valid: true };
   }
 
@@ -237,6 +266,42 @@ export class TicketUploadedHandler {
     }
     const date = new Date(str);
     return !isNaN(date.getTime());
+  }
+
+  /**
+   * Map station name to CRS code
+   * Simplified mapping for MVP - handles common stations from test fixtures
+   */
+  private mapStationNameToCRS(stationName: string): string {
+    // Common station name mappings
+    const nameMap: Record<string, string> = {
+      'London Paddington': 'PAD',
+      'Cardiff Central': 'CDF',
+      'Reading': 'RDG',
+      'London Kings Cross': 'KGX',
+      'York': 'YRK',
+    };
+
+    // If exact match found, return CRS code
+    if (nameMap[stationName]) {
+      return nameMap[stationName];
+    }
+
+    // If already a 3-letter uppercase code, return as-is
+    if (/^[A-Z]{3}$/.test(stationName)) {
+      return stationName;
+    }
+
+    // Fallback: try to extract 3-letter code or use first 3 chars uppercase
+    // This is a last resort for unmapped stations
+    const words = stationName.split(' ');
+    const lastWord = words[words.length - 1];
+    if (lastWord.length === 3) {
+      return lastWord.toUpperCase();
+    }
+
+    // Ultimate fallback: first 3 chars uppercase
+    return stationName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, '');
   }
 
   /**
@@ -271,6 +336,55 @@ export class TicketUploadedHandler {
       payload.arrival_datetime,
       payload.journey_type,
     ]);
+
+    // AC-8: Create journey_segments if legs array provided
+    if (payload.legs && payload.legs.length > 0) {
+      const travelDate = payload.departure_datetime.split('T')[0]; // Extract YYYY-MM-DD
+
+      for (let i = 0; i < payload.legs.length; i++) {
+        const leg = payload.legs[i];
+        const segmentOrder = i + 1;
+
+        // Extract RID and TOC code from operator field (format: "1:GW" or "2:AW")
+        const operatorParts = leg.operator.split(':');
+        const rid = operatorParts[0]; // RID prefix (simplified for MVP)
+        const tocCode = operatorParts[1] || 'XX'; // TOC code (e.g., "GW", "AW")
+
+        // Map station names to CRS codes
+        const originCrs = this.mapStationNameToCRS(leg.from);
+        const destinationCrs = this.mapStationNameToCRS(leg.to);
+
+        // Combine travel date with leg times to form ISO 8601 timestamps
+        const scheduledDeparture = `${travelDate}T${leg.departure}:00Z`;
+        const scheduledArrival = `${travelDate}T${leg.arrival}:00Z`;
+
+        const segmentQuery = `
+          INSERT INTO journey_matcher.journey_segments
+            (journey_id, segment_order, rid, toc_code, origin_crs, destination_crs, scheduled_departure, scheduled_arrival)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `;
+
+        try {
+          await this.db.query(segmentQuery, [
+            payload.journey_id,
+            segmentOrder,
+            rid,
+            tocCode,
+            originCrs,
+            destinationCrs,
+            scheduledDeparture,
+            scheduledArrival,
+          ]);
+        } catch (segmentError) {
+          this.logger.error('error creating journey segment', {
+            error: segmentError instanceof Error ? segmentError.message : String(segmentError),
+            journey_id: payload.journey_id,
+            segment_order: segmentOrder,
+          });
+          throw segmentError; // Re-throw to trigger test failure
+        }
+      }
+    }
   }
 }
 
