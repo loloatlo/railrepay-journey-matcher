@@ -6,6 +6,13 @@
  * Date: 2025-12-25
  *
  * Purpose: Core journey records storing user travel plans with origin, destination, and timing.
+ *
+ * IMPORTANT: This file reflects the ORIGINAL migration as applied to the database.
+ * It uses departure_date (date), departure_time_min (time), departure_time_max (time).
+ * DO NOT modify this file — it must match the actual database state created on 2025-12-25.
+ *
+ * New columns (departure_datetime, arrival_datetime, journey_type, status) are added
+ * by migration 1739190000000_add-journey-datetime-columns.cjs
  */
 
 exports.up = (pgm) => {
@@ -33,27 +40,18 @@ exports.up = (pgm) => {
         notNull: true,
         comment: 'Destination station CRS code (e.g., YRK for York)',
       },
-      departure_datetime: {
-        type: 'timestamptz',
+      departure_date: {
+        type: 'date',
         notNull: true,
-        comment: 'Scheduled departure time with timezone (supports GMT/BST transitions)',
+        comment: 'Departure date (date only, no time component)',
       },
-      arrival_datetime: {
-        type: 'timestamptz',
-        notNull: true,
-        comment: 'Scheduled arrival time with timezone (supports GMT/BST transitions)',
+      departure_time_min: {
+        type: 'time',
+        comment: 'Earliest acceptable departure time (null = no preference)',
       },
-      journey_type: {
-        type: 'varchar(20)',
-        notNull: true,
-        default: "'single'",
-        comment: 'Journey type: single or return (MVP only implements single)',
-      },
-      status: {
-        type: 'varchar(50)',
-        notNull: true,
-        default: "'draft'",
-        comment: 'Lifecycle state: draft, confirmed, cancelled',
+      departure_time_max: {
+        type: 'time',
+        comment: 'Latest acceptable departure time (null = no preference)',
       },
       created_at: {
         type: 'timestamptz',
@@ -69,11 +67,11 @@ exports.up = (pgm) => {
       },
     },
     {
-      comment: 'Core journey records with origin, destination, and timing details',
+      comment: 'Core journey records with origin, destination, and timing details (ORIGINAL SCHEMA)',
     }
   );
 
-  // Indexes for query optimization
+  // Index for user_id lookups (supports GET /journeys/user/:user_id queries)
   pgm.createIndex(
     { schema: 'journey_matcher', name: 'journeys' },
     'user_id',
@@ -83,42 +81,10 @@ exports.up = (pgm) => {
       comment: 'Supports GET /journeys/user/:user_id queries',
     }
   );
-
-  pgm.createIndex(
-    { schema: 'journey_matcher', name: 'journeys' },
-    ['DATE(departure_datetime)'],
-    {
-      name: 'idx_journeys_departure_date',
-      method: 'btree',
-      comment: 'Enables date-range queries for nightly claim processing',
-    }
-  );
-
-  pgm.createIndex(
-    { schema: 'journey_matcher', name: 'journeys' },
-    'status',
-    {
-      name: 'idx_journeys_status',
-      method: 'btree',
-      comment: 'Filters for confirmed/draft journeys in bulk operations',
-    }
-  );
 };
 
 exports.down = (pgm) => {
-  // Drop indexes first (implicit via table drop, but explicit for clarity)
-  pgm.dropIndex(
-    { schema: 'journey_matcher', name: 'journeys' },
-    'status',
-    { name: 'idx_journeys_status', ifExists: true }
-  );
-
-  pgm.dropIndex(
-    { schema: 'journey_matcher', name: 'journeys' },
-    ['DATE(departure_datetime)'],
-    { name: 'idx_journeys_departure_date', ifExists: true }
-  );
-
+  // Drop index
   pgm.dropIndex(
     { schema: 'journey_matcher', name: 'journeys' },
     'user_id',
