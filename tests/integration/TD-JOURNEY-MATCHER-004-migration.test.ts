@@ -319,7 +319,9 @@ describe('TD-JOURNEY-MATCHER-004: Migration 1739190200000 Column Addition', () =
       expect(column).toBeDefined();
       expect(column?.column_name).toBe('departure_time');
       expect(column?.data_type).toBe('timestamp without time zone');
-      expect(column?.is_nullable).toBe('NO'); // Original constraint preserved
+      // NOTE: is_nullable is 'YES' after TD-004a migration (1739190300000) relaxes NOT NULL
+      // Original constraint was 'NO' from init-schema.sql, relaxed for expand-migrate-contract Phase 2
+      expect(column?.is_nullable).toBe('YES');
     });
 
     it('should preserve arrival_time column from init-schema.sql', async () => {
@@ -333,7 +335,9 @@ describe('TD-JOURNEY-MATCHER-004: Migration 1739190200000 Column Addition', () =
       expect(column).toBeDefined();
       expect(column?.column_name).toBe('arrival_time');
       expect(column?.data_type).toBe('timestamp without time zone');
-      expect(column?.is_nullable).toBe('NO'); // Original constraint preserved
+      // NOTE: is_nullable is 'YES' after TD-004a migration (1739190300000) relaxes NOT NULL
+      // Original constraint was 'NO' from init-schema.sql, relaxed for expand-migrate-contract Phase 2
+      expect(column?.is_nullable).toBe('YES');
     });
 
     it('should preserve train_uid column from init-schema.sql', async () => {
