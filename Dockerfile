@@ -1,5 +1,6 @@
 # Multi-stage Dockerfile for journey-matcher service
 # Per RailRepay DevOps standards and Railway deployment requirements
+# Cache bust: 2026-02-10-fix-migration-4
 
 # Stage 1: Build dependencies
 FROM node:20-alpine AS deps
