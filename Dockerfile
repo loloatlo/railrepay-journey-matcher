@@ -31,17 +31,19 @@ RUN npm run typecheck
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Install production dependencies for ts-node/esm loader
+# Install production dependencies for ts-node/esm loader and migrations
 # Required for ESM execution: "start": "node --loader ts-node/esm src/index.ts"
+# node-pg-migrate required for running migrations in entrypoint
 COPY package*.json ./
 RUN npm ci --only=production && \
-    npm install ts-node && \
+    npm install ts-node node-pg-migrate && \
     npm cache clean --force
 
 # Copy application code
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/tsconfig.json ./
 COPY --from=builder /app/init-schema.sql ./
+COPY --from=builder /app/migrations ./migrations
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh ./
