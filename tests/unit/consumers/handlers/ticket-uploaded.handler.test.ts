@@ -49,7 +49,12 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
     warn: Mock;
     debug: Mock;
   };
+  let mockPoolClient: {
+    query: Mock;
+    release: Mock;
+  };
   let mockDb: {
+    connect: Mock;
     query: Mock;
   };
   let handler: TicketUploadedHandler;
@@ -79,7 +84,13 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
       debug: vi.fn(),
     };
 
+    mockPoolClient = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    };
+
     mockDb = {
+      connect: vi.fn().mockResolvedValue(mockPoolClient),
       query: vi.fn().mockResolvedValue({ rows: [] }),
     };
 
@@ -112,7 +123,7 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
       });
 
       // Mock DB to return success
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
@@ -125,8 +136,9 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
         })
       );
 
-      // Assert: Database was queried/updated
-      expect(mockDb.query).toHaveBeenCalled();
+      // Assert: Database was queried/updated via transaction client
+      expect(mockDb.connect).toHaveBeenCalled();
+      expect(mockPoolClient.query).toHaveBeenCalled();
     });
 
     it('should extract correlation_id from message headers', async () => {
@@ -146,7 +158,7 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
         'x-correlation-id': 'header-correlation-id',
       });
 
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
@@ -174,7 +186,7 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
@@ -248,7 +260,7 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockRejectedValue(new Error('Database connection lost'));
+      mockPoolClient.query.mockRejectedValue(new Error('Database connection lost'));
 
       // Act: Should NOT throw (consumer continues processing)
       await expect(handler.handle(message)).resolves.not.toThrow();
@@ -410,7 +422,7 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
       const message = createMockMessage(payload, {
         'x-correlation-id': 'test-correlation-123',
       });
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
@@ -438,7 +450,7 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
 
       // No x-correlation-id header
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);

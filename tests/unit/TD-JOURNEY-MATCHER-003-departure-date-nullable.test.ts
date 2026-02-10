@@ -48,7 +48,12 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
     warn: Mock;
     debug: Mock;
   };
+  let mockPoolClient: {
+    query: Mock;
+    release: Mock;
+  };
   let mockDb: {
+    connect: Mock;
     query: Mock;
   };
   let handler: TicketUploadedHandler;
@@ -81,7 +86,13 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       debug: vi.fn(),
     };
 
+    mockPoolClient = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    };
+
     mockDb = {
+      connect: vi.fn().mockResolvedValue(mockPoolClient),
       query: vi.fn().mockResolvedValue({ rows: [] }),
     };
 
@@ -116,7 +127,7 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
         'x-correlation-id': 'test-correlation-td003-001',
       });
 
-      mockDb.query.mockResolvedValue({
+      mockPoolClient.query.mockResolvedValue({
         rows: [{ id: payload.journey_id }],
       });
 
@@ -124,12 +135,13 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       await handler.handle(message);
 
       // Assert: Database INSERT was called
-      expect(mockDb.query).toHaveBeenCalled();
+      expect(mockPoolClient.query).toHaveBeenCalled();
 
       // Verify the INSERT query structure
-      const queryCall = mockDb.query.mock.calls[0];
-      const queryText = queryCall[0] as string;
-      const queryParams = queryCall[1] as any[];
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryText = journeysInsertCall![0] as string;
+      const queryParams = journeysInsertCall![1] as any[];
 
       // CRITICAL: Query MUST include NEW columns (departure_datetime, arrival_datetime, journey_type, status)
       expect(queryText).toContain('departure_datetime');
@@ -172,11 +184,13 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryText = mockDb.query.mock.calls[0][0] as string;
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryText = journeysInsertCall![0] as string;
 
       // Verify departure_date NOT in query
       expect(queryText).not.toMatch(/\bdeparture_date\b/);
@@ -184,7 +198,7 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       // Verify journey_type IS in query
       expect(queryText).toContain('journey_type');
 
-      const queryParams = mockDb.query.mock.calls[0][1] as any[];
+      const queryParams = journeysInsertCall![1] as any[];
       expect(queryParams).toContain('return');
     });
 
@@ -222,16 +236,21 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
 
       for (const payload of payloads) {
         const message = createMockMessage(payload);
-        mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+        mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
         await handler.handle(message);
       }
 
       // Verify all 3 INSERTs executed without departure_date
-      expect(mockDb.query).toHaveBeenCalledTimes(3);
+      // Each handle() produces: BEGIN, INSERT journeys, INSERT outbox, COMMIT = 4 calls
+      expect(mockPoolClient.query).toHaveBeenCalled();
 
+      // Filter for journeys INSERT calls only
+      const journeysCalls = mockPoolClient.query.mock.calls.filter((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysCalls.length).toBe(3);
+      
       for (let i = 0; i < 3; i++) {
-        const queryText = mockDb.query.mock.calls[i][0] as string;
+        const queryText = journeysCalls[i][0] as string;
         expect(queryText).not.toMatch(/\bdeparture_date\b/);
         expect(queryText).toContain('departure_datetime');
         expect(queryText).toContain('arrival_datetime');
@@ -255,11 +274,13 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryText = mockDb.query.mock.calls[0][0] as string;
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryText = journeysInsertCall![0] as string;
 
       // Verify ON CONFLICT clause exists
       expect(queryText).toContain('ON CONFLICT');
@@ -292,16 +313,21 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
 
       // Simulate 3 reprocessings of same message
       for (let i = 0; i < 3; i++) {
-        mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+        mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
         await handler.handle(message);
       }
 
       // Verify 3 queries executed (all identical)
-      expect(mockDb.query).toHaveBeenCalledTimes(3);
+      // Each handle() produces: BEGIN, INSERT journeys, INSERT outbox, COMMIT = 4 calls
+      expect(mockPoolClient.query).toHaveBeenCalled();
 
       // Verify all 3 queries do NOT include departure_date
+      // Filter for journeys INSERT calls only
+      const journeysCalls = mockPoolClient.query.mock.calls.filter((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysCalls.length).toBe(3);
+      
       for (let i = 0; i < 3; i++) {
-        const queryText = mockDb.query.mock.calls[i][0] as string;
+        const queryText = journeysCalls[i][0] as string;
         expect(queryText).not.toMatch(/\bdeparture_date\b/);
       }
     });
@@ -326,9 +352,11 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       const message = createMockMessage(payload);
 
       // Mock database error: null value in column "departure_date" violates not-null constraint
-      mockDb.query.mockRejectedValue(
-        new Error('null value in column "departure_date" of relation "journeys" violates not-null constraint')
-      );
+      mockPoolClient.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN succeeds
+        .mockRejectedValueOnce(
+          new Error('null value in column "departure_date" of relation "journeys" violates not-null constraint')
+        ); // INSERT fails
 
       // Act: Should NOT throw (consumer continues processing)
       await expect(handler.handle(message)).resolves.not.toThrow();
@@ -369,11 +397,13 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryText = mockDb.query.mock.calls[0][0] as string;
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryText = journeysInsertCall![0] as string;
 
       // Required columns (NEW schema)
       const requiredColumns = [
@@ -416,11 +446,13 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryParams = mockDb.query.mock.calls[0][1] as any[];
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryParams = journeysInsertCall![1] as any[];
 
       // Expected params: journey_id, user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type
       // (status is hardcoded as 'draft' in query text, not a parameter)
@@ -454,7 +486,7 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
         'x-correlation-id': 'observability-test-td003-123',
       });
 
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
@@ -466,7 +498,7 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       });
 
       // Verify query was executed (observability doesn't block core functionality)
-      expect(mockDb.query).toHaveBeenCalled();
+      expect(mockPoolClient.query).toHaveBeenCalled();
     });
   });
 });

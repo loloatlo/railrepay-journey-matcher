@@ -64,7 +64,12 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
     warn: Mock;
     debug: Mock;
   };
+  let mockPoolClient: {
+    query: Mock;
+    release: Mock;
+  };
   let mockDb: {
+    connect: Mock;
     query: Mock;
   };
   let handler: TicketUploadedHandler;
@@ -95,7 +100,13 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       debug: vi.fn(),
     };
 
+    mockPoolClient = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    };
+
     mockDb = {
+      connect: vi.fn().mockResolvedValue(mockPoolClient),
       query: vi.fn().mockResolvedValue({ rows: [] }),
     };
 
@@ -136,7 +147,7 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
         'x-correlation-id': 'corr-12345',
       });
 
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
@@ -186,7 +197,7 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
@@ -212,14 +223,14 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
 
       // Assert: Processed successfully (legs optional)
       expect(mockLogger.error).not.toHaveBeenCalled();
-      expect(mockDb.query).toHaveBeenCalled();
+      expect(mockPoolClient.query).toHaveBeenCalled();
     });
 
     it('should validate legs array structure if present', async () => {
@@ -277,25 +288,25 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
 
       // Assert: DB query called for journeys table
-      expect(mockDb.query).toHaveBeenCalledWith(
+      expect(mockPoolClient.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO journey_matcher.journeys'),
         expect.any(Array)
       );
 
       // Assert: DB query called for journey_segments table
-      expect(mockDb.query).toHaveBeenCalledWith(
+      expect(mockPoolClient.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO journey_matcher.journey_segments'),
         expect.any(Array)
       );
 
       // Assert: journey_segments insert includes segment data
-      const segmentInsertCall = mockDb.query.mock.calls.find((call) =>
+      const segmentInsertCall = mockPoolClient.query.mock.calls.find((call) =>
         call[0].includes('journey_segments')
       );
       expect(segmentInsertCall).toBeDefined();
@@ -343,13 +354,13 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
 
       // Assert: journey_segments insert called TWICE (one per leg)
-      const segmentCalls = mockDb.query.mock.calls.filter((call) =>
+      const segmentCalls = mockPoolClient.query.mock.calls.filter((call) =>
         call[0].includes('journey_segments')
       );
       expect(segmentCalls).toHaveLength(2);
@@ -405,13 +416,13 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
 
       // Assert: TOC code extracted correctly
-      const segmentCall = mockDb.query.mock.calls.find((call) =>
+      const segmentCall = mockPoolClient.query.mock.calls.find((call) =>
         call[0].includes('journey_segments')
       );
       expect(segmentCall).toBeDefined();
@@ -431,18 +442,18 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
 
       // Assert: Only journeys table insert, NO journey_segments insert
-      const journeyCalls = mockDb.query.mock.calls.filter((call) =>
+      const journeyCalls = mockPoolClient.query.mock.calls.filter((call) =>
         call[0].includes('journey_matcher.journeys')
       );
       expect(journeyCalls).toHaveLength(1);
 
-      const segmentCalls = mockDb.query.mock.calls.filter((call) =>
+      const segmentCalls = mockPoolClient.query.mock.calls.filter((call) =>
         call[0].includes('journey_segments')
       );
       expect(segmentCalls).toHaveLength(0);
@@ -470,13 +481,13 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       // Act
       await handler.handle(message);
 
       // Assert: journey_segments uses CRS codes (PAD, CDF) not full names
-      const segmentCall = mockDb.query.mock.calls.find((call) =>
+      const segmentCall = mockPoolClient.query.mock.calls.find((call) =>
         call[0].includes('journey_segments')
       );
       expect(segmentCall).toBeDefined();
@@ -512,8 +523,9 @@ describe('TD-WHATSAPP-055: journey-matcher support for enriched journey.created 
 
       const message = createMockMessage(payload);
 
-      // Mock: journeys insert succeeds, segments insert fails
-      mockDb.query
+      // Mock: BEGIN, journeys insert succeeds, segments insert fails
+      mockPoolClient.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
         .mockResolvedValueOnce({ rows: [{ id: payload.journey_id }] }) // journeys insert
         .mockRejectedValueOnce(new Error('Foreign key constraint violation')); // segments insert fails
 

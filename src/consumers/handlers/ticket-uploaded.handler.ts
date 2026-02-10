@@ -311,79 +311,155 @@ export class TicketUploadedHandler {
     payload: JourneyCreatedPayload,
     correlationId: string
   ): Promise<void> {
-    // Insert or update journey in database
-    const query = `
-      INSERT INTO journey_matcher.journeys
-        (id, user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
-      ON CONFLICT (id) DO UPDATE SET
-        user_id = EXCLUDED.user_id,
-        origin_crs = EXCLUDED.origin_crs,
-        destination_crs = EXCLUDED.destination_crs,
-        departure_datetime = EXCLUDED.departure_datetime,
-        arrival_datetime = EXCLUDED.arrival_datetime,
-        journey_type = EXCLUDED.journey_type,
-        updated_at = NOW()
-      RETURNING id
-    `;
+    // Get transaction client from pool
+    const client = await this.db.connect();
 
-    await this.db.query(query, [
-      payload.journey_id,
-      payload.user_id,
-      payload.origin_crs,
-      payload.destination_crs,
-      payload.departure_datetime,
-      payload.arrival_datetime,
-      payload.journey_type,
-    ]);
+    try {
+      // Begin transaction
+      await client.query('BEGIN');
 
-    // AC-8: Create journey_segments if legs array provided
-    if (payload.legs && payload.legs.length > 0) {
-      const travelDate = payload.departure_datetime.split('T')[0]; // Extract YYYY-MM-DD
+      // Insert or update journey in database
+      const query = `
+        INSERT INTO journey_matcher.journeys
+          (id, user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
+        ON CONFLICT (id) DO UPDATE SET
+          user_id = EXCLUDED.user_id,
+          origin_crs = EXCLUDED.origin_crs,
+          destination_crs = EXCLUDED.destination_crs,
+          departure_datetime = EXCLUDED.departure_datetime,
+          arrival_datetime = EXCLUDED.arrival_datetime,
+          journey_type = EXCLUDED.journey_type,
+          updated_at = NOW()
+        RETURNING id
+      `;
 
-      for (let i = 0; i < payload.legs.length; i++) {
-        const leg = payload.legs[i];
-        const segmentOrder = i + 1;
+      await client.query(query, [
+        payload.journey_id,
+        payload.user_id,
+        payload.origin_crs,
+        payload.destination_crs,
+        payload.departure_datetime,
+        payload.arrival_datetime,
+        payload.journey_type,
+      ]);
 
-        // Extract RID and TOC code from operator field (format: "1:GW" or "2:AW")
-        const operatorParts = leg.operator.split(':');
-        const rid = operatorParts[0]; // RID prefix (simplified for MVP)
-        const tocCode = operatorParts[1] || 'XX'; // TOC code (e.g., "GW", "AW")
+      // AC-8: Create journey_segments if legs array provided
+      const segments: Array<{
+        segment_order: number;
+        origin_crs: string;
+        destination_crs: string;
+        scheduled_departure: string;
+        scheduled_arrival: string;
+        rid: string;
+        toc_code: string;
+      }> = [];
 
-        // Map station names to CRS codes
-        const originCrs = this.mapStationNameToCRS(leg.from);
-        const destinationCrs = this.mapStationNameToCRS(leg.to);
+      let tocCode: string | null = null;
 
-        // Combine travel date with leg times to form ISO 8601 timestamps
-        const scheduledDeparture = `${travelDate}T${leg.departure}:00Z`;
-        const scheduledArrival = `${travelDate}T${leg.arrival}:00Z`;
+      if (payload.legs && payload.legs.length > 0) {
+        const travelDate = payload.departure_datetime.split('T')[0]; // Extract YYYY-MM-DD
 
-        const segmentQuery = `
-          INSERT INTO journey_matcher.journey_segments
-            (journey_id, segment_order, rid, toc_code, origin_crs, destination_crs, scheduled_departure, scheduled_arrival)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        `;
+        for (let i = 0; i < payload.legs.length; i++) {
+          const leg = payload.legs[i];
+          const segmentOrder = i + 1;
 
-        try {
-          await this.db.query(segmentQuery, [
+          // Extract RID and TOC code from operator field (format: "1:GW" or "2:AW")
+          const operatorParts = leg.operator.split(':');
+          const rid = operatorParts[0]; // RID prefix (simplified for MVP)
+          const segmentTocCode = operatorParts[1] || 'XX'; // TOC code (e.g., "GW", "AW")
+
+          // Capture first leg's TOC code
+          if (i === 0) {
+            tocCode = segmentTocCode;
+          }
+
+          // Map station names to CRS codes
+          const originCrs = this.mapStationNameToCRS(leg.from);
+          const destinationCrs = this.mapStationNameToCRS(leg.to);
+
+          // Combine travel date with leg times to form ISO 8601 timestamps
+          const scheduledDeparture = `${travelDate}T${leg.departure}:00Z`;
+          const scheduledArrival = `${travelDate}T${leg.arrival}:00Z`;
+
+          // Store segment for outbox payload
+          segments.push({
+            segment_order: segmentOrder,
+            origin_crs: originCrs,
+            destination_crs: destinationCrs,
+            scheduled_departure: scheduledDeparture,
+            scheduled_arrival: scheduledArrival,
+            rid: rid,
+            toc_code: segmentTocCode,
+          });
+
+          const segmentQuery = `
+            INSERT INTO journey_matcher.journey_segments
+              (journey_id, segment_order, rid, toc_code, origin_crs, destination_crs, scheduled_departure, scheduled_arrival)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `;
+
+          await client.query(segmentQuery, [
             payload.journey_id,
             segmentOrder,
             rid,
-            tocCode,
+            segmentTocCode,
             originCrs,
             destinationCrs,
             scheduledDeparture,
             scheduledArrival,
           ]);
-        } catch (segmentError) {
-          this.logger.error('error creating journey segment', {
-            error: segmentError instanceof Error ? segmentError.message : String(segmentError),
-            journey_id: payload.journey_id,
-            segment_order: segmentOrder,
-          });
-          throw segmentError; // Re-throw to trigger test failure
         }
       }
+
+      // AC-2 & AC-3: Write journey.confirmed event to outbox
+      const outboxPayload = {
+        journey_id: payload.journey_id,
+        user_id: payload.user_id,
+        origin_crs: payload.origin_crs,
+        destination_crs: payload.destination_crs,
+        departure_datetime: payload.departure_datetime,
+        arrival_datetime: payload.arrival_datetime,
+        journey_type: payload.journey_type,
+        toc_code: tocCode,
+        segments: segments,
+        correlation_id: correlationId,
+      };
+
+      const outboxQuery = `
+        INSERT INTO journey_matcher.outbox
+          (aggregate_type, aggregate_id, event_type, payload, correlation_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `;
+
+      await client.query(outboxQuery, [
+        'journey',
+        payload.journey_id,
+        'journey.confirmed',
+        JSON.stringify(outboxPayload),
+        correlationId,
+      ]);
+
+      this.logger.info('outbox event written', {
+        journey_id: payload.journey_id,
+        event_type: 'journey.confirmed',
+        correlation_id: correlationId,
+      });
+
+      // Commit transaction
+      await client.query('COMMIT');
+    } catch (error) {
+      // Rollback transaction on any error
+      await client.query('ROLLBACK');
+      this.logger.error('Transaction rolled back', {
+        error: error instanceof Error ? error.message : String(error),
+        journey_id: payload.journey_id,
+        correlation_id: correlationId,
+      });
+      throw error;
+    } finally {
+      // Always release client back to pool
+      client.release();
     }
   }
 }

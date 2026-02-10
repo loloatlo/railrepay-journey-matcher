@@ -48,7 +48,12 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
     warn: Mock;
     debug: Mock;
   };
+  let mockPoolClient: {
+    query: Mock;
+    release: Mock;
+  };
   let mockDb: {
+    connect: Mock;
     query: Mock;
   };
   let handler: TicketUploadedHandler;
@@ -81,7 +86,13 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       debug: vi.fn(),
     };
 
+    mockPoolClient = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    };
+
     mockDb = {
+      connect: vi.fn().mockResolvedValue(mockPoolClient),
       query: vi.fn().mockResolvedValue({ rows: [] }),
     };
 
@@ -116,7 +127,7 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
         'x-correlation-id': 'test-correlation-123',
       });
 
-      mockDb.query.mockResolvedValue({
+      mockPoolClient.query.mockResolvedValue({
         rows: [{ id: payload.journey_id }],
       });
 
@@ -124,12 +135,15 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Database INSERT was called
-      expect(mockDb.query).toHaveBeenCalled();
+      expect(mockPoolClient.query).toHaveBeenCalled();
 
-      // Verify the INSERT query structure
-      const queryCall = mockDb.query.mock.calls[0];
-      const queryText = queryCall[0] as string;
-      const queryParams = queryCall[1] as any[];
+      // Verify the INSERT query structure (index 1 = journeys INSERT, after BEGIN)
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journeys')
+      );
+      expect(journeysInsertCall).toBeDefined();
+      const queryText = journeysInsertCall![0] as string;
+      const queryParams = journeysInsertCall![1] as any[];
 
       // CRITICAL: Query MUST include departure_datetime and arrival_datetime columns
       expect(queryText).toContain('departure_datetime');
@@ -166,11 +180,13 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryParams = mockDb.query.mock.calls[0][1] as any[];
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryParams = journeysInsertCall![1] as any[];
       expect(queryParams).toContain('single');
     });
 
@@ -187,11 +203,13 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryParams = mockDb.query.mock.calls[0][1] as any[];
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryParams = journeysInsertCall![1] as any[];
       expect(queryParams).toContain('return');
     });
 
@@ -208,11 +226,13 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryText = mockDb.query.mock.calls[0][0] as string;
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryText = journeysInsertCall![0] as string;
 
       // Verify status is set to 'draft' in query (handler hardcodes this)
       expect(queryText).toContain("'draft'");
@@ -231,11 +251,13 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       };
 
       const message = createMockMessage(payload);
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 
-      const queryText = mockDb.query.mock.calls[0][0] as string;
+      const journeysInsertCall = mockPoolClient.query.mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journeys"));
+      expect(journeysInsertCall).toBeDefined();
+      const queryText = journeysInsertCall![0] as string;
 
       // Verify query uses ON CONFLICT for idempotency
       expect(queryText).toContain('ON CONFLICT');
@@ -273,7 +295,7 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       );
 
       // Should NOT attempt database INSERT
-      expect(mockDb.query).not.toHaveBeenCalled();
+      expect(mockPoolClient.query).not.toHaveBeenCalled();
     });
   });
 
@@ -304,7 +326,7 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       );
 
       // Should NOT attempt database INSERT
-      expect(mockDb.query).not.toHaveBeenCalled();
+      expect(mockPoolClient.query).not.toHaveBeenCalled();
     });
 
     it('should reject payload with invalid arrival_datetime format', async () => {
@@ -329,7 +351,7 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
         })
       );
 
-      expect(mockDb.query).not.toHaveBeenCalled();
+      expect(mockPoolClient.query).not.toHaveBeenCalled();
     });
 
     it('should reject payload missing departure_datetime', async () => {
@@ -396,9 +418,11 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
       const message = createMockMessage(payload);
 
       // Mock database error: column "departure_datetime" does not exist
-      mockDb.query.mockRejectedValue(
-        new Error('column "departure_datetime" of relation "journeys" does not exist')
-      );
+      mockPoolClient.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN succeeds
+        .mockRejectedValueOnce(
+          new Error('column "departure_datetime" of relation "journeys" does not exist')
+        ); // INSERT fails
 
       // Act: Should NOT throw (consumer continues processing)
       await expect(handler.handle(message)).resolves.not.toThrow();
@@ -430,7 +454,7 @@ describe('TD-JOURNEY-MATCHER-002: Consumer Handler Schema Compatibility', () => 
         'x-correlation-id': 'observability-test-123',
       });
 
-      mockDb.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
 
       await handler.handle(message);
 

@@ -50,7 +50,12 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
     warn: Mock;
     debug: Mock;
   };
+  let mockPoolClient: {
+    query: Mock;
+    release: Mock;
+  };
   let mockDb: {
+    connect: Mock;
     query: Mock;
   };
   let handler: TicketUploadedHandler;
@@ -83,7 +88,13 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       debug: vi.fn(),
     };
 
+    mockPoolClient = {
+      query: vi.fn().mockResolvedValue({ rows: [{ id: 'test-journey-id' }] }),
+      release: vi.fn(),
+    };
+
     mockDb = {
+      connect: vi.fn().mockResolvedValue(mockPoolClient),
       query: vi.fn().mockResolvedValue({ rows: [{ id: 'test-journey-id' }] }),
     };
 
@@ -128,15 +139,17 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       // Act
       await handler.handle(message);
 
-      // Assert: Second query should be segment INSERT with rid column
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
-      const segmentQuery = (mockDb.query as Mock).mock.calls[1][0];
-      expect(segmentQuery).toContain('INSERT INTO journey_matcher.journey_segments');
+      // Assert: Find segment INSERT (after BEGIN and journeys INSERT)
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+      expect(segmentInsertCall).toBeDefined();
+      const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('rid'); // AC-1: rid column must exist
       expect(segmentQuery).toContain('$3'); // rid is third parameter (after journey_id, segment_order)
 
       // Verify rid value extracted from operator field
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[2]).toBe('1'); // rid from "1:GW"
     });
 
@@ -167,13 +180,14 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Segment INSERT includes toc_code column
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
-      const segmentQuery = (mockDb.query as Mock).mock.calls[1][0];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('toc_code'); // AC-1: toc_code column must exist
       expect(segmentQuery).toContain('$4'); // toc_code is fourth parameter
 
       // Verify toc_code value extracted from operator field
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[3]).toBe('AW'); // toc_code from "2:AW"
     });
 
@@ -204,12 +218,14 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Segment INSERT includes scheduled_departure column
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
-      const segmentQuery = (mockDb.query as Mock).mock.calls[1][0];
+      // Transaction sequence: BEGIN, journeys INSERT, segments INSERT, outbox INSERT, COMMIT
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('scheduled_departure'); // AC-1: scheduled_departure column must exist
 
       // Verify scheduled_departure combines travel date with leg departure time
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[6]).toBe('2026-02-11T14:00:00Z'); // ISO 8601 format
     });
 
@@ -240,12 +256,14 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Segment INSERT includes scheduled_arrival column
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
-      const segmentQuery = (mockDb.query as Mock).mock.calls[1][0];
+      // Transaction sequence: BEGIN, journeys INSERT, segments INSERT, outbox INSERT, COMMIT
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('scheduled_arrival'); // AC-1: scheduled_arrival column must exist
 
       // Verify scheduled_arrival combines travel date with leg arrival time
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[7]).toBe('2026-02-12T08:20:00Z'); // ISO 8601 format
     });
   });
@@ -280,12 +298,14 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Two queries - one for journey INSERT, one for segment INSERT
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
-      const segmentQuery = (mockDb.query as Mock).mock.calls[1][0];
+      // Transaction sequence: BEGIN, journeys INSERT, segments INSERT, outbox INSERT, COMMIT
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('INSERT INTO journey_matcher.journey_segments');
 
       // Verify segment_order = 1 for first leg
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[1]).toBe(1); // segment_order
     });
 
@@ -330,16 +350,21 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Four queries - one journey INSERT, three segment INSERTs
-      expect(mockDb.query).toHaveBeenCalledTimes(4);
+      // Transaction sequence: BEGIN, journeys INSERT, 3x segments INSERTs, outbox INSERT, COMMIT
 
       // Verify segment_order values: 1, 2, 3
-      const segment1Params = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentCalls = (mockPoolClient.query as Mock).mock.calls.filter((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+      expect(segmentCalls.length).toBe(3);
+
+      const segment1Params = segmentCalls[0][1];
       expect(segment1Params[1]).toBe(1); // First leg has segment_order = 1
 
-      const segment2Params = (mockDb.query as Mock).mock.calls[2][1];
+      const segment2Params = segmentCalls[1][1];
       expect(segment2Params[1]).toBe(2); // Second leg has segment_order = 2
 
-      const segment3Params = (mockDb.query as Mock).mock.calls[3][1];
+      const segment3Params = segmentCalls[2][1];
       expect(segment3Params[1]).toBe(3); // Third leg has segment_order = 3
     });
 
@@ -361,10 +386,18 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       // Act
       await handler.handle(message);
 
-      // Assert: Only one query - journey INSERT, no segment INSERT
-      expect(mockDb.query).toHaveBeenCalledTimes(1);
-      const journeyQuery = (mockDb.query as Mock).mock.calls[0][0];
-      expect(journeyQuery).toContain('INSERT INTO journey_matcher.journeys');
+      // Assert: Only one journey INSERT, no segment INSERT
+      // Transaction sequence: BEGIN, journeys INSERT, outbox INSERT, COMMIT (no segments)
+      const journeysInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journeys')
+      );
+      expect(journeysInsertCall).toBeDefined();
+
+      // Verify no segment INSERTs occurred
+      const segmentCalls = (mockPoolClient.query as Mock).mock.calls.filter((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+      expect(segmentCalls.length).toBe(0);
     });
 
     it('should NOT call segment INSERT when journey has empty legs array', async () => {
@@ -386,7 +419,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Only one query - journey INSERT, no segment INSERT
-      expect(mockDb.query).toHaveBeenCalledTimes(1);
+      // Transaction sequence: BEGIN, journeys INSERT, outbox INSERT, COMMIT (no segments)
     });
   });
 
@@ -420,7 +453,9 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[2]).toBe('1'); // rid
       expect(segmentParams[3]).toBe('GW'); // toc_code
     });
@@ -452,7 +487,9 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[2]).toBe('2'); // rid
       expect(segmentParams[3]).toBe('AW'); // toc_code
     });
@@ -484,7 +521,9 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Handler uses fallback logic (entire string as rid, "XX" as toc_code)
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[2]).toBe('MALFORMED'); // Full string as rid
       expect(segmentParams[3]).toBe('XX'); // Fallback toc_code per handler logic line 351
     });
@@ -520,7 +559,9 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: scheduled_departure is "2026-02-15T06:30:00Z"
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[6]).toBe('2026-02-15T06:30:00Z'); // Date from departure_datetime + time from leg.departure
     });
 
@@ -551,7 +592,9 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: scheduled_arrival is "2026-02-16T23:59:00Z"
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[7]).toBe('2026-02-16T23:59:00Z'); // Date from departure_datetime + time from leg.arrival
     });
 
@@ -588,13 +631,19 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       // Act
       await handler.handle(message);
 
+      // Assert: Filter for segment INSERTs
+      const segmentCalls = (mockPoolClient.query as Mock).mock.calls.filter((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+      expect(segmentCalls.length).toBe(2);
+
       // Assert: First leg times
-      const segment1Params = (mockDb.query as Mock).mock.calls[1][1];
+      const segment1Params = segmentCalls[0][1];
       expect(segment1Params[6]).toBe('2026-02-17T10:00:00Z'); // First leg scheduled_departure
       expect(segment1Params[7]).toBe('2026-02-17T10:30:00Z'); // First leg scheduled_arrival
 
       // Assert: Second leg times
-      const segment2Params = (mockDb.query as Mock).mock.calls[2][1];
+      const segment2Params = segmentCalls[1][1];
       expect(segment2Params[6]).toBe('2026-02-17T12:00:00Z'); // Second leg scheduled_departure
       expect(segment2Params[7]).toBe('2026-02-17T14:30:00Z'); // Second leg scheduled_arrival
     });
@@ -630,7 +679,9 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: origin_crs mapped to PAD
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[4]).toBe('PAD'); // origin_crs (handler maps name → code)
     });
 
@@ -661,7 +712,9 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: CRS codes unchanged
-      const segmentParams = (mockDb.query as Mock).mock.calls[1][1];
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      expect(segmentInsertCall).toBeDefined();
+      const segmentParams = segmentInsertCall[1];
       expect(segmentParams[4]).toBe('RDG'); // origin_crs
       expect(segmentParams[5]).toBe('OXF'); // destination_crs
     });
@@ -669,9 +722,10 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
 
   describe('Error handling for segment INSERT failures', () => {
     it('should log error and throw when segment INSERT fails due to missing columns', async () => {
-      // Arrange: Mock db.query to fail on second call (segment INSERT)
-      mockDb.query = vi
+      // Arrange: Mock poolClient.query to fail on second call (segment INSERT)
+      mockPoolClient.query = vi
         .fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
         .mockResolvedValueOnce({ rows: [{ id: 'journey-123' }] }) // Journey INSERT succeeds
         .mockRejectedValueOnce(
           new Error('column "rid" of relation "journey_segments" does not exist')
