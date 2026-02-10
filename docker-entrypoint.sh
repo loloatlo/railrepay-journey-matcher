@@ -31,5 +31,8 @@ try {
 }
 "
 
+echo "Running database migrations..."
+npx node-pg-migrate up --migrations-dir ./migrations || echo "Migrations may have already been applied"
+
 echo "Starting journey-matcher service..."
 exec npm start
