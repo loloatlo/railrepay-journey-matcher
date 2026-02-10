@@ -125,7 +125,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
       // Expected call: INSERT INTO journey_matcher.outbox (aggregate_type, aggregate_id, event_type, payload, correlation_id)
       const outboxInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
         call[0].includes('journey_matcher.outbox')
-      );
+      )!;
 
       expect(outboxInsertCall).toBeDefined();
       expect(outboxInsertCall[0]).toContain('aggregate_type');
@@ -168,7 +168,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
       // Verify outbox INSERT includes segments in payload
       const outboxInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
         call[0].includes('journey_matcher.outbox')
-      );
+      )!;
 
       expect(outboxInsertCall).toBeDefined();
 
@@ -215,7 +215,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
       // Find outbox INSERT call
       const outboxInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
         call[0].includes('journey_matcher.outbox')
-      );
+      )!;
 
       expect(outboxInsertCall).toBeDefined();
 
@@ -283,7 +283,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
       // Find outbox INSERT call
       const outboxInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
         call[0].includes('journey_matcher.outbox')
-      );
+      )!;
 
       expect(outboxInsertCall).toBeDefined();
 
@@ -332,7 +332,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
 
       const outboxInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
         call[0].includes('journey_matcher.outbox')
-      );
+      )!;
 
       const payloadParam = outboxInsertCall[1].find((param: any) => {
         if (typeof param === 'string') {
@@ -435,7 +435,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
       // Verify no outbox INSERT was attempted after failure
       const outboxInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
         call[0].includes('journey_matcher.outbox')
-      );
+      )!;
       expect(outboxInsertCall).toBeUndefined();
     });
 
@@ -532,7 +532,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
       const logCalls = (mockLogger.info as Mock).mock.calls;
       const outboxLogCall = logCalls.find((call) =>
         call[0].includes('outbox') || call[0].includes('journey.confirmed')
-      );
+      )!;
 
       expect(outboxLogCall).toBeDefined();
 
@@ -578,7 +578,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Writing (Unit Tests)', () => {
 
       const errorLogCall = (mockLogger.error as Mock).mock.calls.find((call) =>
         call[0].includes('error')
-      );
+      )!;
 
       expect(errorLogCall).toBeDefined();
       expect(errorLogCall[1]).toHaveProperty('correlation_id');

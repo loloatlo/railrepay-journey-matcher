@@ -454,4 +454,161 @@ describe('TD-WHATSAPP-028: GET /routes endpoint', () => {
       }).rejects.toThrow(/OTP_ROUTER_URL/);
     });
   });
+
+  describe('TD-JOURNEY-MATCHER-006: tripId field in API response', () => {
+    /**
+     * AC-1: journey-matcher API response includes a `tripId` field in each leg object,
+     * sourced from `leg.trip?.gtfsId`
+     *
+     * CONTEXT: OTP returns trip.gtfsId in format "1:202602098022803" where "1" is the
+     * GTFS feed ID and the rest is the Darwin RID. This field must be exposed in the
+     * API response so downstream handlers can extract the real RID.
+     */
+    it('should include tripId field in each leg sourced from trip.gtfsId', async () => {
+      // Arrange: Mock OTP response with trip.gtfsId containing Darwin RID
+      sharedPlanJourney.mockResolvedValue({
+        fromCoords: { lat: 51.5154, lon: -0.1755 }, // London Paddington
+        toCoords: { lat: 51.4816, lon: -3.1791 }, // Cardiff Central
+        itineraries: [
+          {
+            startTime: 1640000000000,
+            endTime: 1640016000000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Paddington', stop: { gtfsId: '1:PAD' } },
+                to: { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
+                startTime: 1640000000000,
+                endTime: 1640016000000,
+                distance: 229000,
+                trip: { gtfsId: '1:202602098022803' }, // Real Darwin RID format
+                route: { gtfsId: '1:GW' }, // TOC code
+              },
+            ],
+          },
+        ],
+      });
+
+      // Act
+      const response = await request(app)
+        .get('/routes')
+        .query({ from: 'PAD', to: 'CDF', date: '2024-12-20', time: '10:00' });
+
+      // Assert: Response status
+      expect(response.status).toBe(200);
+
+      // Assert: tripId field present in leg
+      const firstRoute = response.body.routes[0];
+      const firstLeg = firstRoute.legs[0];
+      expect(firstLeg).toHaveProperty('tripId');
+      expect(firstLeg.tripId).toBe('1:202602098022803');
+    });
+
+    /**
+     * AC-4: When `trip.gtfsId` is unavailable (e.g., WALK legs), `tripId` defaults to `null`
+     */
+    it('should set tripId to null when trip.gtfsId is unavailable (WALK leg)', async () => {
+      // Arrange: Mock OTP response with WALK leg (no trip.gtfsId)
+      sharedPlanJourney.mockResolvedValue({
+        fromCoords: { lat: 51.5154, lon: -0.1755 },
+        toCoords: { lat: 51.4816, lon: -3.1791 },
+        itineraries: [
+          {
+            startTime: 1640000000000,
+            endTime: 1640016000000,
+            legs: [
+              {
+                mode: 'WALK',
+                from: { name: 'Station A' },
+                to: { name: 'Station B' },
+                startTime: 1640000000000,
+                endTime: 1640000300000, // 5 min walk
+                distance: 300,
+                // No trip field for WALK legs
+                // route field also absent for WALK
+              },
+            ],
+          },
+        ],
+      });
+
+      // Act
+      const response = await request(app)
+        .get('/routes')
+        .query({ from: 'PAD', to: 'CDF', date: '2024-12-20', time: '10:00' });
+
+      // Assert: Response status
+      expect(response.status).toBe(200);
+
+      // Assert: tripId is null for WALK leg
+      const firstRoute = response.body.routes[0];
+      const firstLeg = firstRoute.legs[0];
+      expect(firstLeg).toHaveProperty('tripId');
+      expect(firstLeg.tripId).toBeNull();
+    });
+
+    it('should handle multi-leg journey with mix of RAIL and WALK legs', async () => {
+      // Arrange: Journey with RAIL + WALK + RAIL
+      sharedPlanJourney.mockResolvedValue({
+        fromCoords: { lat: 51.5309, lon: -0.1239 },
+        toCoords: { lat: 55.9521, lon: -3.1889 },
+        itineraries: [
+          {
+            startTime: 1640000000000,
+            endTime: 1640023200000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Kings Cross', stop: { gtfsId: '1:KGX' } },
+                to: { name: 'York', stop: { gtfsId: '1:YRK' } },
+                startTime: 1640000000000,
+                endTime: 1640010000000,
+                distance: 303000,
+                trip: { gtfsId: '1:202602091234567' },
+                route: { gtfsId: '1:GR' },
+              },
+              {
+                mode: 'WALK',
+                from: { name: 'York Platform 1' },
+                to: { name: 'York Platform 4' },
+                startTime: 1640010000000,
+                endTime: 1640010300000, // 5 min walk
+                distance: 200,
+                // No trip field
+              },
+              {
+                mode: 'RAIL',
+                from: { name: 'York', stop: { gtfsId: '1:YRK' } },
+                to: { name: 'Edinburgh Waverley', stop: { gtfsId: '1:EDB' } },
+                startTime: 1640012000000,
+                endTime: 1640023200000,
+                distance: 231000,
+                trip: { gtfsId: '1:202602097654321' },
+                route: { gtfsId: '1:GR' },
+              },
+            ],
+          },
+        ],
+      });
+
+      // Act
+      const response = await request(app)
+        .get('/routes')
+        .query({ from: 'KGX', to: 'EDB', date: '2024-12-20', time: '10:00' });
+
+      // Assert
+      expect(response.status).toBe(200);
+      const legs = response.body.routes[0].legs;
+      expect(legs.length).toBe(3);
+
+      // First RAIL leg has tripId
+      expect(legs[0].tripId).toBe('1:202602091234567');
+
+      // WALK leg has null tripId
+      expect(legs[1].tripId).toBeNull();
+
+      // Second RAIL leg has tripId
+      expect(legs[2].tripId).toBe('1:202602097654321');
+    });
+  });
 });

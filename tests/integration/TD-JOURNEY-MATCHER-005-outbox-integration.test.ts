@@ -80,7 +80,7 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Publishing Integration', () => {
     // Create handler with real database
     handler = createTicketUploadedHandler({
       db: pgPool,
-      logger: createLogger({ service: 'journey-matcher-test', level: 'error' }),
+      logger: createLogger({ serviceName: 'journey-matcher-test', level: 'error' }),
     });
   }, 120000); // 2 minute timeout
 

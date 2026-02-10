@@ -499,4 +499,263 @@ describe('TD-JOURNEY-007: Ticket Uploaded Handler (journey.created events)', () 
       ).toThrow('logger is required');
     });
   });
+
+  describe('TD-JOURNEY-MATCHER-006: RID extraction from tripId field', () => {
+    /**
+     * AC-2: `ticket-uploaded.handler` extracts the Darwin RID from the leg's `tripId` field
+     * (stripping the `1:` feed prefix) and stores it in `journey_segments.rid`
+     *
+     * CONTEXT: The tripId field contains Darwin RID in format "1:202602098022803"
+     * where "1" is the GTFS feed ID. We need to extract "202602098022803" for the RID.
+     */
+    it('should extract Darwin RID from tripId field and store in journey_segments.rid', async () => {
+      // Arrange: Payload with legs containing tripId field
+      const payload: JourneyCreatedPayload = {
+        journey_id: '550e8400-e29b-41d4-a716-446655440100',
+        user_id: 'user_tripid_test',
+        origin_crs: 'PAD',
+        destination_crs: 'CDF',
+        departure_datetime: '2026-02-09T10:00:00Z',
+        arrival_datetime: '2026-02-09T12:15:00Z',
+        journey_type: 'single',
+        correlation_id: 'corr-tripid',
+        legs: [
+          {
+            from: 'London Paddington',
+            to: 'Cardiff Central',
+            departure: '10:00',
+            arrival: '12:15',
+            operator: '1:GW', // TOC code format
+            tripId: '1:202602098022803', // Real Darwin RID format
+          },
+        ],
+      };
+
+      const message = createMockMessage(payload);
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+
+      // Act
+      await handler.handle(message);
+
+      // Assert: Database insert called with extracted RID (not "1")
+      const segmentInsertCall = mockPoolClient.query.mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+
+      expect(segmentInsertCall).toBeDefined();
+      expect(segmentInsertCall![1]).toEqual([
+        payload.journey_id,
+        1, // segment_order
+        '202602098022803', // RID - extracted from tripId (feed prefix stripped)
+        'GW', // TOC code
+        'PAD', // origin_crs
+        'CDF', // destination_crs
+        '2026-02-09T10:00:00Z', // scheduled_departure
+        '2026-02-09T12:15:00Z', // scheduled_arrival
+      ]);
+    });
+
+    /**
+     * AC-3: `journey.confirmed` outbox event payload includes real Darwin RIDs
+     * in `segments[].rid` (not `1`)
+     */
+    it('should include real Darwin RID in journey.confirmed outbox event payload', async () => {
+      // Arrange
+      const payload: JourneyCreatedPayload = {
+        journey_id: '550e8400-e29b-41d4-a716-446655440101',
+        user_id: 'user_outbox_test',
+        origin_crs: 'KGX',
+        destination_crs: 'YRK',
+        departure_datetime: '2026-02-09T14:30:00Z',
+        arrival_datetime: '2026-02-09T16:45:00Z',
+        journey_type: 'single',
+        correlation_id: 'corr-outbox',
+        legs: [
+          {
+            from: 'London Kings Cross',
+            to: 'York',
+            departure: '14:30',
+            arrival: '16:45',
+            operator: '1:GR',
+            tripId: '1:202602091234567',
+          },
+        ],
+      };
+
+      const message = createMockMessage(payload);
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+
+      // Act
+      await handler.handle(message);
+
+      // Assert: Outbox insert called with real RID in segments
+      const outboxInsertCall = mockPoolClient.query.mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.outbox')
+      );
+
+      expect(outboxInsertCall).toBeDefined();
+
+      const outboxPayload = JSON.parse(outboxInsertCall![1][3]); // 4th parameter is payload JSON
+      expect(outboxPayload.segments).toHaveLength(1);
+      expect(outboxPayload.segments[0].rid).toBe('202602091234567');
+      expect(outboxPayload.segments[0].rid).not.toBe('1'); // NOT the feed ID
+    });
+
+    /**
+     * AC-4: When `tripId` is unavailable (e.g., WALK legs), `rid` defaults to `null`
+     */
+    it('should store null RID when tripId is null (WALK leg)', async () => {
+      // Arrange: Payload with WALK leg (no tripId)
+      const payload: JourneyCreatedPayload = {
+        journey_id: '550e8400-e29b-41d4-a716-446655440102',
+        user_id: 'user_walk_test',
+        origin_crs: 'PAD',
+        destination_crs: 'RDG',
+        departure_datetime: '2026-02-09T08:00:00Z',
+        arrival_datetime: '2026-02-09T08:30:00Z',
+        journey_type: 'single',
+        correlation_id: 'corr-walk',
+        legs: [
+          {
+            from: 'Platform 1',
+            to: 'Platform 4',
+            departure: '08:00',
+            arrival: '08:05',
+            operator: 'Unknown',
+            tripId: null as any, // WALK leg has no tripId
+          },
+        ],
+      };
+
+      const message = createMockMessage(payload);
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+
+      // Act
+      await handler.handle(message);
+
+      // Assert: RID stored as null
+      const segmentInsertCall = mockPoolClient.query.mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+
+      expect(segmentInsertCall).toBeDefined();
+      expect(segmentInsertCall![1][2]).toBeNull(); // RID parameter (index 2) should be null
+    });
+
+    /**
+     * AC-4 (backwards compatibility): When tripId field is absent (legacy payloads),
+     * rid defaults to null instead of the broken operatorParts[0] behavior
+     */
+    it('should store null RID when tripId field is absent (legacy payload)', async () => {
+      // Arrange: Legacy payload WITHOUT tripId field
+      const payload: JourneyCreatedPayload = {
+        journey_id: '550e8400-e29b-41d4-a716-446655440103',
+        user_id: 'user_legacy_test',
+        origin_crs: 'PAD',
+        destination_crs: 'CDF',
+        departure_datetime: '2026-02-09T10:00:00Z',
+        arrival_datetime: '2026-02-09T12:15:00Z',
+        journey_type: 'single',
+        correlation_id: 'corr-legacy',
+        legs: [
+          {
+            from: 'London Paddington',
+            to: 'Cardiff Central',
+            departure: '10:00',
+            arrival: '12:15',
+            operator: '1:GW',
+            // tripId field not present (legacy format)
+          },
+        ],
+      };
+
+      const message = createMockMessage(payload);
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+
+      // Act
+      await handler.handle(message);
+
+      // Assert: RID stored as null (NOT "1" from operator split)
+      const segmentInsertCall = mockPoolClient.query.mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+
+      expect(segmentInsertCall).toBeDefined();
+      expect(segmentInsertCall![1][2]).toBeNull(); // RID should be null
+      expect(segmentInsertCall![1][2]).not.toBe('1'); // NOT the feed prefix
+    });
+
+    it('should handle multi-leg journey with mix of tripId present and absent', async () => {
+      // Arrange: Journey with 2 RAIL legs and 1 WALK leg
+      const payload: JourneyCreatedPayload = {
+        journey_id: '550e8400-e29b-41d4-a716-446655440104',
+        user_id: 'user_multileg_test',
+        origin_crs: 'KGX',
+        destination_crs: 'EDB',
+        departure_datetime: '2026-02-09T10:00:00Z',
+        arrival_datetime: '2026-02-09T16:30:00Z',
+        journey_type: 'single',
+        correlation_id: 'corr-multileg',
+        legs: [
+          {
+            from: 'London Kings Cross',
+            to: 'York',
+            departure: '10:00',
+            arrival: '12:15',
+            operator: '1:GR',
+            tripId: '1:202602091111111', // Has RID
+          },
+          {
+            from: 'York Platform 1',
+            to: 'York Platform 4',
+            departure: '12:15',
+            arrival: '12:20',
+            operator: 'Unknown',
+            tripId: null as any, // WALK leg
+          },
+          {
+            from: 'York',
+            to: 'Edinburgh Waverley',
+            departure: '12:30',
+            arrival: '16:30',
+            operator: '1:GR',
+            tripId: '1:202602092222222', // Has RID
+          },
+        ],
+      };
+
+      const message = createMockMessage(payload);
+      mockPoolClient.query.mockResolvedValue({ rows: [{ id: payload.journey_id }] });
+
+      // Act
+      await handler.handle(message);
+
+      // Assert: Verify all 3 segments inserted with correct RIDs
+      const segmentInsertCalls = mockPoolClient.query.mock.calls.filter((call) =>
+        call[0].includes('INSERT INTO journey_matcher.journey_segments')
+      );
+
+      expect(segmentInsertCalls.length).toBe(3);
+
+      // Leg 1: Real RID
+      expect(segmentInsertCalls[0][1][2]).toBe('202602091111111');
+
+      // Leg 2: null RID (WALK)
+      expect(segmentInsertCalls[1][1][2]).toBeNull();
+
+      // Leg 3: Real RID
+      expect(segmentInsertCalls[2][1][2]).toBe('202602092222222');
+
+      // Assert: Outbox payload has correct RIDs in segments
+      const outboxInsertCall = mockPoolClient.query.mock.calls.find((call) =>
+        call[0].includes('INSERT INTO journey_matcher.outbox')
+      );
+
+      const outboxPayload = JSON.parse(outboxInsertCall![1][3]);
+      expect(outboxPayload.segments).toHaveLength(3);
+      expect(outboxPayload.segments[0].rid).toBe('202602091111111');
+      expect(outboxPayload.segments[1].rid).toBeNull();
+      expect(outboxPayload.segments[2].rid).toBe('202602092222222');
+    });
+  });
 });

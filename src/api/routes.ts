@@ -134,6 +134,7 @@ export function createRoutesRouter(pool: Pool): Router {
           departure: formatTime(leg.startTime),
           arrival: formatTime(leg.endTime),
           operator: extractOperator(leg.route?.gtfsId || 'Unknown'),
+          tripId: leg.trip?.gtfsId || null,  // Expose Darwin RID from OTP
         }));
 
         // Calculate total duration

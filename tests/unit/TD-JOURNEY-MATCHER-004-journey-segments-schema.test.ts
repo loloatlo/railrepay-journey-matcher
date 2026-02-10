@@ -129,7 +129,8 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
             to: 'SWA',
             departure: '08:30',
             arrival: '10:45',
-            operator: '1:GW', // Format: "rid:toc_code"
+            operator: '1:GW', // Format: "feedId:toc_code"
+            tripId: '1:202602098022803', // RID extracted from tripId (AC-4 per TD-006)
           },
         ],
       };
@@ -142,15 +143,15 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       // Assert: Find segment INSERT (after BEGIN and journeys INSERT)
       const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) =>
         call[0].includes('INSERT INTO journey_matcher.journey_segments')
-      );
+      )!;
       expect(segmentInsertCall).toBeDefined();
       const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('rid'); // AC-1: rid column must exist
       expect(segmentQuery).toContain('$3'); // rid is third parameter (after journey_id, segment_order)
 
-      // Verify rid value extracted from operator field
+      // Verify rid value extracted from tripId field (correct behavior per TD-006)
       const segmentParams = segmentInsertCall[1];
-      expect(segmentParams[2]).toBe('1'); // rid from "1:GW"
+      expect(segmentParams[2]).toBe('202602098022803'); // rid from tripId "1:202602098022803"
     });
 
     it('should include toc_code column in segment INSERT query when journey has legs', async () => {
@@ -180,7 +181,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: Segment INSERT includes toc_code column
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('toc_code'); // AC-1: toc_code column must exist
@@ -219,7 +220,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
 
       // Assert: Segment INSERT includes scheduled_departure column
       // Transaction sequence: BEGIN, journeys INSERT, segments INSERT, outbox INSERT, COMMIT
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('scheduled_departure'); // AC-1: scheduled_departure column must exist
@@ -257,7 +258,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
 
       // Assert: Segment INSERT includes scheduled_arrival column
       // Transaction sequence: BEGIN, journeys INSERT, segments INSERT, outbox INSERT, COMMIT
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('scheduled_arrival'); // AC-1: scheduled_arrival column must exist
@@ -299,7 +300,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
 
       // Assert: Two queries - one for journey INSERT, one for segment INSERT
       // Transaction sequence: BEGIN, journeys INSERT, segments INSERT, outbox INSERT, COMMIT
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentQuery = segmentInsertCall[0];
       expect(segmentQuery).toContain('INSERT INTO journey_matcher.journey_segments');
@@ -426,7 +427,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
   describe('AC-4: Operator field parsing for rid and toc_code', () => {
     // AC-4: Verify operator field (format "rid:toc_code") is correctly split
 
-    it('should parse operator field "1:GW" into rid=1 and toc_code=GW', async () => {
+    it('should parse tripId "1:202602098111222" into rid and operator "1:GW" into toc_code', async () => {
       // Arrange
       const payload: JourneyCreatedPayload = {
         journey_id: 'journey-gw',
@@ -442,7 +443,8 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
             to: 'SWA',
             departure: '08:00',
             arrival: '10:00',
-            operator: '1:GW', // Great Western Railway
+            operator: '1:GW', // Great Western Railway (toc_code from operator)
+            tripId: '1:202602098111222', // RID from tripId (AC-4 per TD-006)
           },
         ],
       };
@@ -453,14 +455,14 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentParams = segmentInsertCall[1];
-      expect(segmentParams[2]).toBe('1'); // rid
-      expect(segmentParams[3]).toBe('GW'); // toc_code
+      expect(segmentParams[2]).toBe('202602098111222'); // rid from tripId
+      expect(segmentParams[3]).toBe('GW'); // toc_code from operator
     });
 
-    it('should parse operator field "2:AW" into rid=2 and toc_code=AW', async () => {
+    it('should parse tripId "2:202602098333444" into rid and operator "2:AW" into toc_code', async () => {
       // Arrange
       const payload: JourneyCreatedPayload = {
         journey_id: 'journey-aw',
@@ -476,7 +478,8 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
             to: 'YRK',
             departure: '09:00',
             arrival: '11:00',
-            operator: '2:AW', // Arriva Trains Wales
+            operator: '2:AW', // Arriva Trains Wales (toc_code from operator)
+            tripId: '2:202602098333444', // RID from tripId (AC-4 per TD-006)
           },
         ],
       };
@@ -487,15 +490,15 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentParams = segmentInsertCall[1];
-      expect(segmentParams[2]).toBe('2'); // rid
-      expect(segmentParams[3]).toBe('AW'); // toc_code
+      expect(segmentParams[2]).toBe('202602098333444'); // rid from tripId
+      expect(segmentParams[3]).toBe('AW'); // toc_code from operator
     });
 
-    it('should handle operator field without colon by using full string as rid and XX as toc_code fallback', async () => {
-      // Arrange: Edge case - operator field malformed (no colon)
+    it('should handle operator field without colon by using full string as toc_code and null rid when tripId absent', async () => {
+      // Arrange: Edge case - operator field malformed (no colon), no tripId
       const payload: JourneyCreatedPayload = {
         journey_id: 'journey-malformed',
         user_id: 'user-malformed',
@@ -511,6 +514,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
             departure: '08:00',
             arrival: '10:00',
             operator: 'MALFORMED', // No colon separator
+            // tripId field not present - RID should be null per TD-006
           },
         ],
       };
@@ -520,12 +524,12 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       // Act
       await handler.handle(message);
 
-      // Assert: Handler uses fallback logic (entire string as rid, "XX" as toc_code)
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      // Assert: Handler uses fallback logic (null rid per TD-006, full operator string as toc_code per line 370)
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentParams = segmentInsertCall[1];
-      expect(segmentParams[2]).toBe('MALFORMED'); // Full string as rid
-      expect(segmentParams[3]).toBe('XX'); // Fallback toc_code per handler logic line 351
+      expect(segmentParams[2]).toBeNull(); // rid is null when tripId absent (correct behavior per TD-006)
+      expect(segmentParams[3]).toBe('MALFORMED'); // Full operator string as toc_code when no colon separator
     });
   });
 
@@ -559,7 +563,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: scheduled_departure is "2026-02-15T06:30:00Z"
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentParams = segmentInsertCall[1];
       expect(segmentParams[6]).toBe('2026-02-15T06:30:00Z'); // Date from departure_datetime + time from leg.departure
@@ -592,7 +596,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: scheduled_arrival is "2026-02-16T23:59:00Z"
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentParams = segmentInsertCall[1];
       expect(segmentParams[7]).toBe('2026-02-16T23:59:00Z'); // Date from departure_datetime + time from leg.arrival
@@ -679,7 +683,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: origin_crs mapped to PAD
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentParams = segmentInsertCall[1];
       expect(segmentParams[4]).toBe('PAD'); // origin_crs (handler maps name → code)
@@ -712,7 +716,7 @@ describe('TD-JOURNEY-MATCHER-004: journey_segments Schema Compatibility', () => 
       await handler.handle(message);
 
       // Assert: CRS codes unchanged
-      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"));
+      const segmentInsertCall = (mockPoolClient.query as Mock).mock.calls.find((call) => call[0].includes("INSERT INTO journey_matcher.journey_segments"))!;
       expect(segmentInsertCall).toBeDefined();
       const segmentParams = segmentInsertCall[1];
       expect(segmentParams[4]).toBe('RDG'); // origin_crs

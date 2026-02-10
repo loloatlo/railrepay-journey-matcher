@@ -53,6 +53,7 @@ export interface JourneyCreatedPayload {
     departure: string;
     arrival: string;
     operator: string;
+    tripId?: string | null;  // Darwin RID from OTP trip.gtfsId (format: "1:YYYYMMDDNNNNNNN")
   }>;
 }
 
@@ -351,7 +352,7 @@ export class TicketUploadedHandler {
         destination_crs: string;
         scheduled_departure: string;
         scheduled_arrival: string;
-        rid: string;
+        rid: string | null;
         toc_code: string;
       }> = [];
 
@@ -364,10 +365,17 @@ export class TicketUploadedHandler {
           const leg = payload.legs[i];
           const segmentOrder = i + 1;
 
-          // Extract RID and TOC code from operator field (format: "1:GW" or "2:AW")
+          // Extract TOC code from operator field (format: "1:GW" or "2:AW")
           const operatorParts = leg.operator.split(':');
-          const rid = operatorParts[0]; // RID prefix (simplified for MVP)
-          const segmentTocCode = operatorParts[1] || 'XX'; // TOC code (e.g., "GW", "AW")
+          const segmentTocCode = operatorParts[1] || operatorParts[0] || 'XX'; // TOC code (e.g., "GW", "AW")
+
+          // Extract real Darwin RID from tripId field (strip feed prefix "1:")
+          // Falls back to null if tripId not available (WALK legs, legacy payloads)
+          let rid: string | null = null;
+          if (leg.tripId) {
+            const tripParts = leg.tripId.split(':');
+            rid = tripParts.length > 1 ? tripParts[1] : tripParts[0];
+          }
 
           // Capture first leg's TOC code
           if (i === 0) {
