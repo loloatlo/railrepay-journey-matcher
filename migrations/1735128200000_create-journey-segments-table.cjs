@@ -16,6 +16,7 @@ exports.up = (pgm) => {
   // NOTE: init-schema.sql uses different column names (departure_time, arrival_time, train_uid)
   // vs migration (scheduled_departure, scheduled_arrival, rid, toc_code)
   // The IF NOT EXISTS will no-op if init-schema version exists, preserving that schema
+  // REMOVED: All COMMENT ON COLUMN statements to ensure idempotency (TD-JOURNEY-MATCHER-002)
   pgm.sql(`
     CREATE TABLE IF NOT EXISTS journey_matcher.journey_segments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,58 +32,10 @@ exports.up = (pgm) => {
     )
   `);
 
-  pgm.sql(`
-    COMMENT ON TABLE journey_matcher.journey_segments IS 'Individual journey segments with RIDs for Darwin delay correlation (CRITICAL PATH)'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.id IS 'Primary key for individual segments'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.journey_id IS 'Foreign key to journeys table (CASCADE delete ensures orphan cleanup)'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.segment_order IS 'Order in multi-leg journey (1, 2, 3...)'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.rid IS 'CRITICAL: Railway Identifier from OTP tripId; maps to Darwin delay data (format: YYYYMMDDHHMMSS + 2-char suffix)'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.toc_code IS 'Train Operating Company code (e.g., GR for LNER, VT for Avanti)'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.origin_crs IS 'Segment origin station CRS code'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.destination_crs IS 'Segment destination station CRS code'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.scheduled_departure IS 'Scheduled departure for this segment'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.scheduled_arrival IS 'Scheduled arrival for this segment'
-  `);
-
-  pgm.sql(`
-    COMMENT ON COLUMN journey_matcher.journey_segments.created_at IS 'Audit trail: record creation timestamp'
-  `);
-
   // Unique constraint: prevent duplicate segment numbers within a journey
   pgm.sql(`
     CREATE UNIQUE INDEX IF NOT EXISTS journey_segments_journey_id_segment_order_key
     ON journey_matcher.journey_segments (journey_id, segment_order)
-  `);
-
-  pgm.sql(`
-    COMMENT ON INDEX journey_matcher.journey_segments_journey_id_segment_order_key IS 'Prevents duplicate segment_order within a journey'
   `);
 
   // Indexes for query optimization
@@ -92,16 +45,8 @@ exports.up = (pgm) => {
   `);
 
   pgm.sql(`
-    COMMENT ON INDEX journey_matcher.idx_journey_segments_journey_id IS 'Foreign key lookup (not auto-indexed in PostgreSQL); supports JOIN queries'
-  `);
-
-  pgm.sql(`
     CREATE INDEX IF NOT EXISTS idx_journey_segments_rid
     ON journey_matcher.journey_segments (rid)
-  `);
-
-  pgm.sql(`
-    COMMENT ON INDEX journey_matcher.idx_journey_segments_rid IS 'CRITICAL PATH: Enables Darwin delay correlation queries (P95 < 50ms target)'
   `);
 };
 
