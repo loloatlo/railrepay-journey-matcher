@@ -44,6 +44,7 @@ COPY --from=builder /app/src ./src
 COPY --from=builder /app/tsconfig.json ./
 COPY --from=builder /app/init-schema.sql ./
 COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/database.json ./
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh ./
