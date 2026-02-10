@@ -14,9 +14,9 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
     "start": "node --loader ts-node/esm src/index.ts",
-    "migrate:up": "node-pg-migrate up",
-    "migrate:down": "node-pg-migrate down",
-    "migrate:create": "node-pg-migrate create"
+    "migrate:up": "node-pg-migrate up -f database.json",
+    "migrate:down": "node-pg-migrate down -f database.json",
+    "migrate:create": "node-pg-migrate create -f database.json"
   },
   "keywords": [
     "railrepay",

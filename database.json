@@ -1,10 +1,9 @@
 {
-  "default": {
-    "user": "${PGUSER}",
-    "password": "${PGPASSWORD}",
-    "host": "${PGHOST}",
-    "port": "${PGPORT}",
-    "database": "${PGDATABASE}",
-    "schema": "journey_matcher"
-  }
+  "schema": "journey_matcher",
+  "migrations-table": "journey_matcher_pgmigrations",
+  "migrations-dir": "migrations",
+  "migration-file-language": "cjs",
+  "create-schema": true,
+  "migrations-schema": "journey_matcher",
+  "create-migrations-schema": true
 }
