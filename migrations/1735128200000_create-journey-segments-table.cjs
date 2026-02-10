@@ -8,6 +8,13 @@
  * Purpose: Store individual segments (legs) of a journey with RIDs for Darwin delay correlation.
  * CRITICAL: This table is the bridge between OTP journey planning and Darwin delay tracking.
  *
+ * IMPORTANT: This file reflects the ORIGINAL migration as applied to the database.
+ * It uses departure_time (timestamp), arrival_time (timestamp), train_uid (varchar).
+ * DO NOT modify this file — it must match the actual database state created by init-schema.sql.
+ *
+ * New columns (rid, toc_code, scheduled_departure, scheduled_arrival) are added
+ * by migration 1739190200000_add-journey-segments-columns.cjs
+ *
  * MODIFIED: Added IF NOT EXISTS guards for idempotency (init-schema.sql may pre-create tables)
  */
 
@@ -22,29 +29,25 @@ exports.up = async (pgm) => {
   `);
 
   if (result.rows[0].table_exists) {
-    // Table already exists from init-schema.sql (possibly with different columns)
+    // Table already exists from init-schema.sql
     // Skip entire migration - table structure is managed by init-schema.sql
     return;
   }
 
   // Only runs on fresh databases without init-schema.sql
   // MODIFIED: Using raw SQL with IF NOT EXISTS because init-schema.sql may have pre-created the table
-  // NOTE: init-schema.sql uses different column names (departure_time, arrival_time, train_uid)
-  // vs migration (scheduled_departure, scheduled_arrival, rid, toc_code)
-  // The IF NOT EXISTS will no-op if init-schema version exists, preserving that schema
-  // REMOVED: All COMMENT ON COLUMN statements to ensure idempotency (TD-JOURNEY-MATCHER-002)
+  // REMOVED: All COMMENT ON COLUMN/INDEX statements to ensure idempotency (TD-JOURNEY-MATCHER-002)
   pgm.sql(`
     CREATE TABLE IF NOT EXISTS journey_matcher.journey_segments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       journey_id UUID NOT NULL REFERENCES journey_matcher.journeys(id) ON DELETE CASCADE,
       segment_order INTEGER NOT NULL,
-      rid VARCHAR(16) NOT NULL,
-      toc_code CHAR(2) NOT NULL,
       origin_crs CHAR(3) NOT NULL,
       destination_crs CHAR(3) NOT NULL,
-      scheduled_departure TIMESTAMPTZ NOT NULL,
-      scheduled_arrival TIMESTAMPTZ NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      departure_time TIMESTAMP NOT NULL,
+      arrival_time TIMESTAMP NOT NULL,
+      train_uid VARCHAR(20),
+      created_at TIMESTAMP DEFAULT NOW()
     )
   `);
 
@@ -54,26 +57,15 @@ exports.up = async (pgm) => {
     ON journey_matcher.journey_segments (journey_id, segment_order)
   `);
 
-  // Indexes for query optimization
+  // Index for journey_id lookups (supports segment retrieval by journey)
   pgm.sql(`
     CREATE INDEX IF NOT EXISTS idx_journey_segments_journey_id
     ON journey_matcher.journey_segments (journey_id)
   `);
-
-  pgm.sql(`
-    CREATE INDEX IF NOT EXISTS idx_journey_segments_rid
-    ON journey_matcher.journey_segments (rid)
-  `);
 };
 
 exports.down = (pgm) => {
-  // Drop indexes
-  pgm.dropIndex(
-    { schema: 'journey_matcher', name: 'journey_segments' },
-    'rid',
-    { name: 'idx_journey_segments_rid', ifExists: true }
-  );
-
+  // Drop index
   pgm.dropIndex(
     { schema: 'journey_matcher', name: 'journey_segments' },
     'journey_id',
