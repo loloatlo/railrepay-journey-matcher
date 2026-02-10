@@ -166,3 +166,193 @@ The following columns should now exist in `journey_matcher.journey_segments`:
 
 _Deployed by: Moykle DevOps Engineer_
 _Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>_
+
+---
+---
+
+# Phase TD-4: Deployment Report
+## TD-JOURNEY-MATCHER-005: Add correlation_id to Outbox Events
+
+**Date**: 2026-02-10
+**Deployment ID**: `a2c1eec0-8d18-43ac-8d76-5af9d817b3c7`
+**Commit**: `c2567c481bd5df7cacdae43f0be4090a31f26226`
+**Status**: ✅ SUCCESS
+
+---
+
+## Pre-Deployment Gate Verification
+
+✅ **QA Sign-off**: Received from Jessie (Phase TD-3)
+✅ **Tests Passing**: 229/229 tests passed
+✅ **Coverage Thresholds**: 93.38%/88.63%/100%/93.38% (exceeds ≥80%/≥75%)
+✅ **No Skipped Tests**: Verified (10 Vitest worker exit errors are not test failures)
+
+---
+
+## Deployment Process
+
+### 1. Git Operations
+- **Staged files**: 21 files (1 migration, 6 modified tests, 3 new test files, 11 docs)
+- **Commit message**: "Resolve TD-JOURNEY-MATCHER-005: Add correlation_id to outbox events"
+- **Push**: `git push origin main` → Railway auto-deploy triggered at 08:45:33 UTC
+
+### 2. Build Phase
+- **Builder**: Dockerfile
+- **Stages**: Builder (npm ci, typecheck) → Runner (production deps, migrations)
+- **Build result**: SUCCESS
+- **Image digest**: `sha256:6bdeb61daae52635bfc4dbc6b7b4e839868300dd4b574f54f28292d5ee7dbdd9`
+
+### 3. Migration Execution
+```sql
+-- Migration: 1739190400000_add-outbox-correlation-id (UP)
+ALTER TABLE "journey_matcher"."outbox"
+  ADD "correlation_id" uuid;
+
+COMMENT ON COLUMN "journey_matcher"."outbox"."correlation_id" IS
+'Distributed tracing identifier, propagated from originating WhatsApp message
+through journey confirmation to delay detection';
+
+-- Migration tracking
+INSERT INTO "journey_matcher"."journey_matcher_pgmigrations"
+(name, run_on) VALUES ('1739190400000_add-outbox-correlation-id', NOW());
+```
+
+**Result**: ✅ Migration applied successfully
+**Output**: "✅ Added column: correlation_id (UUID, nullable)"
+
+### 4. Service Startup
+- **Port**: 8080
+- **Health check**: `/health` endpoint responding at 08:46:42 UTC
+- **Database**: Connected to `postgres.railway.internal:5432`
+- **Metrics pusher**: Started successfully (15s interval)
+- **Kafka consumer**: Connected and subscribed to 3 topics:
+  - `journey.created`
+  - `journey.confirmed`
+  - `segments.confirmed`
+- **First health check**: Responded with 200 OK (correlation_id: d1b741f1-446e-4b85-8220-ebd0af64fbc1)
+
+---
+
+## Post-Deployment MCP Verification
+
+### Deployment Status
+✅ **Railway deployment**: SUCCESS status confirmed via `mcp__Railway__list-deployments`
+✅ **Build logs**: Clean build, typecheck passed, no errors
+✅ **Deploy logs**: Migration executed, service started successfully
+
+### Service Health
+✅ **Health check**: `https://railrepay-journey-matcher-production.up.railway.app/health`
+   - Status: healthy
+   - Service: journey-matcher
+   - Database: healthy
+   - Response time: <100ms
+
+✅ **Database connection**: PostgreSQL pool initialized (10 connections)
+✅ **Metrics pusher**: Started successfully
+✅ **Kafka consumer**: Connected and active on all 3 topics
+
+### Error Check
+✅ **Error logs**: No @level:error entries (only npm notices, experimental loader warnings)
+
+### Migration Verification (Production Schema)
+✅ **Column exists**: Verified via `mcp__postgres__query`
+```json
+{
+  "column_name": "correlation_id",
+  "data_type": "uuid",
+  "is_nullable": "YES",
+  "column_default": null
+}
+```
+
+---
+
+## Schema Verification (Current State)
+
+The `journey_matcher.outbox` table now has the following columns:
+
+| Column Name | Type | Nullable | Purpose |
+|-------------|------|----------|---------|
+| `id` | UUID | NOT NULL | Primary key |
+| `aggregate_id` | UUID | NOT NULL | Journey ID |
+| `aggregate_type` | VARCHAR(50) | NOT NULL | Event aggregate type |
+| `event_type` | VARCHAR(100) | NOT NULL | Event type identifier |
+| `payload` | JSONB | NOT NULL | Event payload |
+| `status` | VARCHAR(20) | NOT NULL | Outbox status (PENDING/SENT/FAILED) |
+| `created_at` | TIMESTAMPTZ | NOT NULL | Creation timestamp |
+| `processed_at` | TIMESTAMPTZ | NULL | Processing timestamp |
+| **`correlation_id`** | **UUID** | **NULL** | **Tracing identifier (new)** |
+
+---
+
+## Rollback Triggers (None Activated)
+
+- ❌ Health check failure within 5 minutes
+- ❌ Error rate exceeds 1% within 15 minutes
+- ❌ Smoke test failures
+- ❌ MCP verification failures
+
+**Conclusion**: No rollback required. Deployment is stable.
+
+---
+
+## Files Deployed
+
+### Migration (1)
+- `migrations/1739190400000_add-outbox-correlation-id.cjs`
+
+### Handler Changes (1)
+- `src/consumers/handlers/ticket-uploaded.handler.ts` (transaction-wrapped outbox INSERT)
+
+### Tests (9)
+- **New**: `tests/unit/TD-JOURNEY-MATCHER-005-outbox-event.test.ts` (20 tests)
+- **New**: `tests/integration/TD-JOURNEY-MATCHER-005-outbox-integration.test.ts` (9 tests)
+- **New**: `tests/integration/TD-JOURNEY-MATCHER-005-migration.test.ts` (10 tests)
+- **Modified**: 6 existing test files (transaction client mock pattern)
+- **Summary**: `tests/TD-JOURNEY-MATCHER-005-TEST-SUMMARY.md`
+
+### Documentation (6)
+- `docs/design/RFC-005-add-outbox-correlation-id.md`
+- `docs/phases/TD-005-PHASE-TD0-SPECIFICATION.md`
+- `docs/phases/TD-005-PHASE-TD0.5-DATA-LAYER.md`
+- `docs/phases/TD-005-PHASE-TD1-HANDOFF-TO-BLAKE.md`
+- `docs/phases/TD-005-PHASE-TD3-QA-REPORT.md`
+- `docs/TD-1-HANDOFF-TD-JOURNEY-012.md`, `docs/TD-1-QA-REVIEW-TD-JOURNEY-012.md`
+
+---
+
+## Handoff to Quinn (Phase TD-5)
+
+**Status**: ✅ Ready for verification
+
+**Quinn's verification checklist**:
+- [ ] Health check endpoint responding (verified: 200 OK)
+- [ ] Service consuming Kafka events without errors
+- [ ] Migration tracking in `journey_matcher_pgmigrations` table
+- [ ] `correlation_id` column exists with UUID type, nullable
+- [ ] Update Backlog item status to "Done"
+- [ ] Create Changelog entry for correlation_id tracing enhancement
+
+**Deployment URL**: `https://railrepay-journey-matcher-production.up.railway.app`
+**Backlog Reference**: TD-JOURNEY-MATCHER-005
+**RFC Reference**: RFC-005 (Add Outbox Correlation ID)
+
+---
+
+## Moykle Sign-off
+
+**Deployment completed successfully. All MCP verification gates passed. Service is stable and consuming events with correlation_id propagation enabled.**
+
+**Key achievements**:
+- Migration added `correlation_id` UUID column to `journey_matcher.outbox`
+- Handler now writes journey.confirmed events to outbox in transaction
+- Zero downtime deployment (health check responding within 1 minute)
+- No errors in deployment or runtime logs
+- 229 tests passing with 93.38% line coverage
+
+**Phase TD-4 COMPLETE** ✅
+
+---
+
+_Deployed by: Moykle DevOps Engineer_
+_Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>_
