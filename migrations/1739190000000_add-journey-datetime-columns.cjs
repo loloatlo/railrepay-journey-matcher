@@ -80,12 +80,12 @@ exports.up = (pgm) => {
     }
   );
 
-  // Add partial index for departure_date queries (used by eval-coordinator)
+  // Add index for departure_datetime queries (used by eval-coordinator for date-range queries)
   pgm.createIndex(
     { schema: 'journey_matcher', name: 'journeys' },
-    ['DATE(departure_datetime)'],
+    'departure_datetime',
     {
-      name: 'idx_journeys_departure_date',
+      name: 'idx_journeys_departure_datetime',
       method: 'btree',
       comment: 'Enables date-range queries for nightly claim processing',
     }
@@ -96,8 +96,8 @@ exports.down = (pgm) => {
   // Drop indexes first
   pgm.dropIndex(
     { schema: 'journey_matcher', name: 'journeys' },
-    ['DATE(departure_datetime)'],
-    { name: 'idx_journeys_departure_date', ifExists: true }
+    'departure_datetime',
+    { name: 'idx_journeys_departure_datetime', ifExists: true }
   );
 
   pgm.dropIndex(
