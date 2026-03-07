@@ -166,9 +166,14 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       expect(queryParams).toContain(payload.arrival_datetime);
       expect(queryParams).toContain(payload.journey_type);
 
-      // Verify parameter count matches column count (should be 7 for new schema)
-      // id, user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type
-      expect(queryParams.length).toBe(7);
+      // Verify parameter count matches column count (10 params for updated schema)
+      // $1=id, $2=user_id, $3=origin_crs, $4=destination_crs,
+      // $5=departure_datetime, $6=arrival_datetime, $7=journey_type,
+      // $8=ticket_fare_pence, $9=ticket_class, $10=ticket_type (all null here — payload has no ticket fields)
+      expect(queryParams.length).toBe(10);
+      expect(queryParams[7]).toBeNull();
+      expect(queryParams[8]).toBeNull();
+      expect(queryParams[9]).toBeNull();
     });
 
     it('should execute INSERT without departure_date for journey_type="return"', async () => {
@@ -433,7 +438,7 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       }
     });
 
-    it('should have parameter count matching INSERT column count (7 params)', async () => {
+    it('should have parameter count matching INSERT column count (10 params)', async () => {
       const payload: JourneyCreatedPayload = {
         journey_id: 'a00e8400-e29b-41d4-a716-446655440009',
         user_id: 'whatsapp:447700900010',
@@ -454,9 +459,13 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       expect(journeysInsertCall).toBeDefined();
       const queryParams = journeysInsertCall![1] as any[];
 
-      // Expected params: journey_id, user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type
+      // Expected params:
+      // $1=journey_id, $2=user_id, $3=origin_crs, $4=destination_crs,
+      // $5=departure_datetime, $6=arrival_datetime, $7=journey_type,
+      // $8=ticket_fare_pence, $9=ticket_class, $10=ticket_type
       // (status is hardcoded as 'draft' in query text, not a parameter)
-      expect(queryParams.length).toBe(7);
+      // ticket fields are null here — payload has no ticket fields
+      expect(queryParams.length).toBe(10);
 
       // Verify params match payload
       expect(queryParams[0]).toBe(payload.journey_id);
@@ -466,6 +475,9 @@ describe('TD-JOURNEY-MATCHER-003: departure_date Not Included in Consumer INSERT
       expect(queryParams[4]).toBe(payload.departure_datetime);
       expect(queryParams[5]).toBe(payload.arrival_datetime);
       expect(queryParams[6]).toBe(payload.journey_type);
+      expect(queryParams[7]).toBeNull();  // ticket_fare_pence — not in this payload
+      expect(queryParams[8]).toBeNull();  // ticket_class — not in this payload
+      expect(queryParams[9]).toBeNull();  // ticket_type — not in this payload
     });
   });
 

@@ -47,6 +47,9 @@ export interface JourneyCreatedPayload {
   arrival_datetime: string;
   journey_type: 'single' | 'return';
   correlation_id?: string;
+  ticket_fare_pence?: number | null;
+  ticket_class?: string | null;
+  ticket_type?: string | null;
   legs?: Array<{
     from: string;
     to: string;
@@ -322,8 +325,8 @@ export class TicketUploadedHandler {
       // Insert or update journey in database
       const query = `
         INSERT INTO journey_matcher.journeys
-          (id, user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
+          (id, user_id, origin_crs, destination_crs, departure_datetime, arrival_datetime, journey_type, status, ticket_fare_pence, ticket_class, ticket_type)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft', $8, $9, $10)
         ON CONFLICT (id) DO UPDATE SET
           user_id = EXCLUDED.user_id,
           origin_crs = EXCLUDED.origin_crs,
@@ -331,6 +334,9 @@ export class TicketUploadedHandler {
           departure_datetime = EXCLUDED.departure_datetime,
           arrival_datetime = EXCLUDED.arrival_datetime,
           journey_type = EXCLUDED.journey_type,
+          ticket_fare_pence = EXCLUDED.ticket_fare_pence,
+          ticket_class = EXCLUDED.ticket_class,
+          ticket_type = EXCLUDED.ticket_type,
           updated_at = NOW()
         RETURNING id
       `;
@@ -343,6 +349,9 @@ export class TicketUploadedHandler {
         payload.departure_datetime,
         payload.arrival_datetime,
         payload.journey_type,
+        payload.ticket_fare_pence ?? null,
+        payload.ticket_class ?? null,
+        payload.ticket_type ?? null,
       ]);
 
       // AC-8: Create journey_segments if legs array provided
@@ -432,6 +441,9 @@ export class TicketUploadedHandler {
         toc_code: tocCode,
         segments: segments,
         correlation_id: correlationId,
+        ticket_fare_pence: payload.ticket_fare_pence ?? null,
+        ticket_class: payload.ticket_class ?? null,
+        ticket_type: payload.ticket_type ?? null,
       };
 
       const outboxQuery = `
