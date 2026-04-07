@@ -109,6 +109,8 @@ export interface CorridorScore {
   detourRatio: number; // Route distance / straight-line distance
   routeDistanceKm: number; // Actual route distance
   transferCount: number; // Number of transfers
+  timeProximityPenalty: number; // Time proximity penalty in minutes (BL-186)
+  timeDeltaMinutes: number; // Absolute minutes from requested departure time (BL-186)
 }
 
 /**

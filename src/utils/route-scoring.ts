@@ -23,6 +23,14 @@ const DEFAULT_CONSTANTS = {
 };
 
 /**
+ * BL-186 (TD-JMATCHER-OFFSET): Time proximity weight
+ * Each minute away from requested departure time adds 0.5 min penalty.
+ * Deliberately mild: 15-min-late direct train beats connection-heavy route,
+ * but 60-min-away service gets +30 min penalty.
+ */
+const TIME_PROXIMITY_WEIGHT = 0.5;
+
+/**
  * Calculate Haversine distance between two coordinates
  * Formula: a = sin²(Δφ/2) + cos φ1 ⋅ cos φ2 ⋅ sin²(Δλ/2)
  *          c = 2 ⋅ atan2( √a, √(1−a) )
@@ -123,11 +131,15 @@ export function detectCorridorKey(itinerary: OTPItinerary): string {
 /**
  * Score a single itinerary using corridor-based algorithm
  * Per RE-JOURNEY-001 § Part 4:
- * score = duration_min + detourPenalty_min + transfers × TRANSFER_PENALTY_MIN
+ * score = duration_min + detourPenalty_min + transfers × TRANSFER_PENALTY_MIN + timeProximityPenalty
+ *
+ * BL-186 (TD-JMATCHER-OFFSET): Added requestedDepartureTime parameter for time proximity scoring.
+ * timeProximityPenalty = abs(itinerary.startTime - requestedDepartureTime) / 60000 × TIME_PROXIMITY_WEIGHT
  *
  * @param itinerary - OTP itinerary to score
  * @param straightLineDistanceKm - Straight-line distance for detour calculation
  * @param constants - Scoring constants
+ * @param requestedDepartureTime - User's requested departure time in Unix ms (BL-186)
  * @returns Complete corridor score breakdown
  */
 export function scoreItinerary(
@@ -137,7 +149,8 @@ export function scoreItinerary(
     DETOUR_THRESHOLD: number;
     DETOUR_WEIGHT_MIN: number;
     TRANSFER_PENALTY_MIN: number;
-  }
+  },
+  requestedDepartureTime?: number
 ): CorridorScore {
   // Calculate duration in minutes
   const durationMs = itinerary.endTime - itinerary.startTime;
@@ -169,8 +182,17 @@ export function scoreItinerary(
   // Calculate transfer penalty
   const transferPenalty = transferCount * constants.TRANSFER_PENALTY_MIN;
 
-  // Calculate total score
-  const score = duration + detourPenalty + transferPenalty;
+  // BL-186: Calculate time proximity penalty
+  // Uses abs() so both early and late departures are penalised equally.
+  // When requestedDepartureTime is not provided, penalty is 0 (backward-compatible).
+  const timeDeltaMinutes =
+    requestedDepartureTime !== undefined
+      ? Math.abs(itinerary.startTime - requestedDepartureTime) / 60000
+      : 0;
+  const timeProximityPenalty = timeDeltaMinutes * TIME_PROXIMITY_WEIGHT;
+
+  // Calculate total score (lower = better)
+  const score = duration + detourPenalty + transferPenalty + timeProximityPenalty;
 
   // Detect corridor
   const corridor = detectCorridorKey(itinerary);
@@ -184,6 +206,8 @@ export function scoreItinerary(
     detourRatio,
     routeDistanceKm,
     transferCount,
+    timeProximityPenalty,
+    timeDeltaMinutes,
   };
 }
 
@@ -192,6 +216,7 @@ export function scoreItinerary(
  * @param itineraries - Array of OTP itineraries
  * @param straightLineDistanceKm - Straight-line distance
  * @param constants - Scoring constants
+ * @param requestedDepartureTime - User's requested departure time in Unix ms (BL-186)
  * @returns Map of corridor key to array of scored routes (sorted by score ascending)
  */
 export function groupByCorridorAndScore(
@@ -201,12 +226,13 @@ export function groupByCorridorAndScore(
     DETOUR_THRESHOLD: number;
     DETOUR_WEIGHT_MIN: number;
     TRANSFER_PENALTY_MIN: number;
-  }
+  },
+  requestedDepartureTime?: number
 ): Map<string, ScoredRoute[]> {
   const grouped = new Map<string, ScoredRoute[]>();
 
   for (const itinerary of itineraries) {
-    const corridorScore = scoreItinerary(itinerary, straightLineDistanceKm, constants);
+    const corridorScore = scoreItinerary(itinerary, straightLineDistanceKm, constants, requestedDepartureTime);
     const corridorKey = corridorScore.corridor;
 
     if (!grouped.has(corridorKey)) {
@@ -232,6 +258,7 @@ export function groupByCorridorAndScore(
  * @param itineraries - Array of OTP itineraries
  * @param straightLineDistanceKm - Straight-line distance
  * @param constants - Optional scoring constants (uses defaults if omitted)
+ * @param requestedDepartureTime - User's requested departure time in Unix ms (BL-186)
  * @returns Array of best routes per corridor, ranked by score ascending
  */
 export function rerankRoutesByCorridorScore(
@@ -241,7 +268,8 @@ export function rerankRoutesByCorridorScore(
     DETOUR_THRESHOLD: number;
     DETOUR_WEIGHT_MIN: number;
     TRANSFER_PENALTY_MIN: number;
-  }
+  },
+  requestedDepartureTime?: number
 ): ScoredRoute[] {
   // Use default constants if not provided
   const scoringConstants = constants || DEFAULT_CONSTANTS;
@@ -252,7 +280,7 @@ export function rerankRoutesByCorridorScore(
   }
 
   // Group by corridor and score
-  const grouped = groupByCorridorAndScore(itineraries, straightLineDistanceKm, scoringConstants);
+  const grouped = groupByCorridorAndScore(itineraries, straightLineDistanceKm, scoringConstants, requestedDepartureTime);
 
   // Extract best route per corridor
   const bestPerCorridor: ScoredRoute[] = [];

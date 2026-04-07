@@ -35,12 +35,16 @@ const RESOLVE_STOP_QUERY = `
  *
  * TD-JOURNEY-012: Updated to include distance, duration, generalizedCost
  * for corridor-based reranking algorithm
+ *
+ * BL-186 (TD-JMATCHER-OFFSET): numItineraries increased 8→15, searchWindow: 3600 added
+ * so OTP searches within ±30 minutes of requested departure time.
  */
 const PLAN_JOURNEY_QUERY = `
   query PlanJourney(
     $fromLat: Float!, $fromLon: Float!,
     $toLat: Float!, $toLon: Float!,
-    $date: String!, $time: String!
+    $date: String!, $time: String!,
+    $searchWindow: Int!
   ) {
     plan(
       from: {lat: $fromLat, lon: $fromLon}
@@ -48,7 +52,8 @@ const PLAN_JOURNEY_QUERY = `
       date: $date
       time: $time
       transportModes: [{mode: RAIL}]
-      numItineraries: 8
+      numItineraries: 15
+      searchWindow: $searchWindow
     ) {
       itineraries {
         startTime
@@ -156,6 +161,7 @@ export class OTPClient {
       ]);
 
       // Step 2: Execute GraphQL plan query with coordinates
+      // BL-186: searchWindow: 3600 tells OTP to search within ±30 min of requested time
       const response = await this.axiosClient.post<OTPPlanResponse>(
         '', // POST to baseURL
         {
@@ -167,6 +173,7 @@ export class OTPClient {
             toLon: toCoords.lon,
             date: variables.date,
             time: variables.time,
+            searchWindow: 3600,
           },
         },
         { headers }

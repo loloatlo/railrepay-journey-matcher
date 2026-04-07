@@ -41,37 +41,24 @@ export function createRoutesRouter(pool: Pool): Router {
    * - to: Destination station CRS code (required)
    * - date: Travel date YYYY-MM-DD (required)
    * - time: Departure time HH:mm (required)
+   * - offset: Number of routes to skip for pagination (optional, default 0, BL-186)
    *
    * Response (200 OK):
    * {
-   *   "routes": [
-   *     {
-   *       "legs": [
-   *         {
-   *           "from": "London Kings Cross",
-   *           "to": "Edinburgh Waverley",
-   *           "departure": "10:00",
-   *           "arrival": "14:30",
-   *           "operator": "LNER"
-   *         }
-   *       ],
-   *       "totalDuration": "4h 30m",
-   *       "isDirect": true,
-   *       "interchangeStation": null
-   *     }
-   *   ]
+   *   "routes": [...],
+   *   "hasMore": true | false   (BL-186: indicates whether further pages exist)
    * }
    *
    * Errors:
-   * - 400: Missing required query parameters
+   * - 400: Missing required query parameters or invalid offset
    * - 404: No routes found
    * - 500: OTP service unavailable
    */
   router.get('/', async (req: Request, res: Response) => {
     const correlationId = (req as any).correlationId || 'unknown';
 
-    // Validate required query parameters (AC-2)
-    const { from, to, date, time } = req.query;
+    // Validate required query parameters
+    const { from, to, date, time, offset: offsetParam } = req.query;
 
     if (!from || typeof from !== 'string') {
       logger.warn('Missing required parameter: from', { correlationId });
@@ -93,16 +80,29 @@ export function createRoutesRouter(pool: Pool): Router {
       return res.status(400).json({ error: 'Missing required parameter: time' });
     }
 
+    // BL-186: Extract and validate offset parameter (default 0)
+    const PAGE_SIZE = 5;
+    let offset = 0;
+    if (offsetParam !== undefined) {
+      const parsed = parseInt(String(offsetParam), 10);
+      if (isNaN(parsed) || parsed < 0) {
+        logger.warn('Invalid offset parameter', { correlationId, offsetParam });
+        return res.status(400).json({ error: 'Invalid offset parameter: must be a non-negative integer' });
+      }
+      offset = parsed;
+    }
+
     logger.info('Fetching routes from OTP', {
       correlationId,
       from,
       to,
       date,
       time,
+      offset,
     });
 
     try {
-      // Call OTP client with correlation ID (AC-5)
+      // Call OTP client with correlation ID
       const otpResponse = await otpClient.planJourney(
         { from, to, date, time },
         correlationId
@@ -116,17 +116,24 @@ export function createRoutesRouter(pool: Pool): Router {
         otpResponse.toCoords.lon
       );
 
-      // TD-JOURNEY-012: Rerank routes by corridor score
-      // Groups by corridor (interchange + route IDs), selects best per corridor, ranks by score
+      // BL-186: Construct requestedDepartureTime from date + time params (Unix ms)
+      // Used by time-proximity scoring so routes close to requested time rank higher
+      const requestedDepartureTime = new Date(`${date}T${time}:00Z`).getTime();
+
+      // TD-JOURNEY-012 / BL-186: Rerank routes by corridor score including time proximity
       const rankedRoutes = rerankRoutesByCorridorScore(
         otpResponse.itineraries,
-        straightLineDistanceKm
-        // Uses default constants: DETOUR_THRESHOLD=1.2, DETOUR_WEIGHT_MIN=20, TRANSFER_PENALTY_MIN=15
+        straightLineDistanceKm,
+        undefined, // Uses default constants: DETOUR_THRESHOLD=1.2, DETOUR_WEIGHT_MIN=20, TRANSFER_PENALTY_MIN=15
+        requestedDepartureTime
       );
 
-      // Transform top N routes (1 per corridor) to API contract format (AC-1)
-      // Limit to top 3 corridors for API response
-      const routes = rankedRoutes.slice(0, 3).map(({ itinerary, corridorScore }) => {
+      // BL-186: Apply offset pagination (pageSize=5)
+      const hasMore = offset + PAGE_SIZE < rankedRoutes.length;
+      const pagedRoutes = rankedRoutes.slice(offset, offset + PAGE_SIZE);
+
+      // Transform paged routes to API contract format
+      const routes = pagedRoutes.map(({ itinerary, corridorScore }) => {
         // Transform legs
         const legs = itinerary.legs.map((leg) => ({
           from: leg.from.name,
@@ -156,10 +163,13 @@ export function createRoutesRouter(pool: Pool): Router {
       logger.info('Routes fetched and reranked successfully', {
         correlationId,
         routeCount: routes.length,
+        totalRanked: rankedRoutes.length,
+        offset,
+        hasMore,
         straightLineDistanceKm: straightLineDistanceKm.toFixed(1),
       });
 
-      return res.status(200).json({ routes });
+      return res.status(200).json({ routes, hasMore });
     } catch (error: any) {
       // Error handling (AC-3, AC-4)
       logger.error('OTP client error', {

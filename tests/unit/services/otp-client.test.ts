@@ -155,6 +155,7 @@ describe('OTPClient', () => {
     );
 
     // Third call: plan journey with coordinates
+    // BL-186 (TD-JMATCHER-OFFSET): searchWindow: 3600 added per AC-3
     expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
       3,
       '',
@@ -167,6 +168,7 @@ describe('OTPClient', () => {
           toLon: -1.0803,
           date: '2025-01-25',
           time: '14:30',
+          searchWindow: 3600,
         },
       }),
       expect.any(Object)
