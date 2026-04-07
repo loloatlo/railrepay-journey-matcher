@@ -44,7 +44,7 @@ const PLAN_JOURNEY_QUERY = `
     $fromLat: Float!, $fromLon: Float!,
     $toLat: Float!, $toLon: Float!,
     $date: String!, $time: String!,
-    $searchWindow: Int!
+    $searchWindow: Long!
   ) {
     plan(
       from: {lat: $fromLat, lon: $fromLon}
