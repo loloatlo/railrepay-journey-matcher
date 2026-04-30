@@ -13,7 +13,7 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
-    "start": "node --import ./src/utils/metrics-patch.cjs --loader ts-node/esm src/index.ts",
+    "start": "node --loader ts-node/esm src/index.ts",
     "migrate:up": "node-pg-migrate up -f database.json",
     "migrate:down": "node-pg-migrate down -f database.json",
     "migrate:create": "node-pg-migrate create -f database.json"
@@ -45,7 +45,7 @@
   },
   "dependencies": {
     "@railrepay/kafka-client": "^2.0.0",
-    "@railrepay/metrics-pusher": "^1.1.0",
+    "@railrepay/metrics-pusher": "file:./vendor/railrepay-metrics-pusher-1.1.1.tgz",
     "@railrepay/postgres-client": "^1.0.0",
     "@railrepay/winston-logger": "^1.0.0",
     "axios": "^1.7.9",
