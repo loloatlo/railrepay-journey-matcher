@@ -373,4 +373,407 @@ describe('US-2 / RAILREPAY-JM-001 — JourneyMatcherService (unit)', () => {
       expect(infoOrWarn).toBe(true);
     });
   });
+
+  // ── Branch coverage: fallback paths in buildSegments / selectBestItinerary ──
+  // US-4 self-fix (Jessie, 2026-04-30): covers uncovered branches at lines
+  // 250-251, 266, 269 per QA coverage report — branch coverage was 65%, needs ≥75%.
+
+  describe('Branch coverage: selectBestItinerary — empty itineraries throws', () => {
+    it('should throw when OTP planJourney returns zero itineraries (line 250-251 branch)', async () => {
+      // Unique input: empty itineraries array — not a timeout or station error,
+      // so it won't be caught as no_match; the empty-array guard fires instead.
+      mockPlanJourney.mockResolvedValue({ itineraries: [] });
+
+      await expect(
+        service.matchJourney(
+          { ...BASE_INPUT, departure_date: '2026-08-01', departure_time: '23:59' },
+          'corr-empty-itineraries'
+        )
+      ).rejects.toThrow('No itineraries to select from');
+    });
+  });
+
+  describe('Branch coverage: buildSegments — from/to fallback to name substring when stop.gtfsId absent', () => {
+    it('should derive origin_crs from leg.from.name substring when from.stop.gtfsId is absent (line 266 branch)', async () => {
+      // OTP response with no stop.gtfsId on from — triggers name-based fallback
+      const otpWithNoFromGtfsId = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'Paddington', stop: undefined }, // no gtfsId — uses name substring
+                to:   { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  { gtfsId: '1:202605150900001' },
+                route: { gtfsId: '1:GW' },
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithNoFromGtfsId);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440020',
+        origin_crs: 'PAD', // persister still returns PAD — segment derivation is tested
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-02' },
+        'corr-no-from-gtfsid'
+      );
+
+      // Should match (persister was called → happy path completed)
+      expect(result.status).toBe('matched');
+      // Persister was called — the origin_crs was derived from name substring 'PAD'
+      expect(mockPersistJourney).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: BASE_INPUT.user_id }),
+        expect.any(String)
+      );
+    });
+
+    it('should derive destination_crs from leg.to.name substring when to.stop.gtfsId is absent (line 269 branch)', async () => {
+      // OTP response with no stop.gtfsId on to — triggers name-based fallback
+      const otpWithNoToGtfsId = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Paddington', stop: { gtfsId: '1:PAD' } },
+                to:   { name: 'Cardiff', stop: undefined }, // no gtfsId — uses name substring
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  { gtfsId: '1:202605150900001' },
+                route: { gtfsId: '1:GW' },
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithNoToGtfsId);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440021',
+        destination_crs: 'CDF',
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-03' },
+        'corr-no-to-gtfsid'
+      );
+
+      expect(result.status).toBe('matched');
+      expect(mockPersistJourney).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: BASE_INPUT.user_id }),
+        expect.any(String)
+      );
+    });
+
+    it('should use UNK when from.stop.gtfsId and from.name are both absent (line 266 null-coalescing branch)', async () => {
+      // Simulate pathological OTP response where from.name is null at runtime
+      // even though the type says it's required (defensive coding path)
+      const otpWithNullFromName = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: null as any, stop: undefined }, // both absent → 'UNK'
+                to:   { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  { gtfsId: '1:202605150900001' },
+                route: { gtfsId: '1:GW' },
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithNullFromName);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440022',
+        origin_crs: 'UNK',
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-04' },
+        'corr-null-from-name'
+      );
+
+      // Should still reach persist (UNK is valid — service doesn't reject it)
+      expect(result.status).toBe('matched');
+      expect(mockPersistJourney).toHaveBeenCalled();
+    });
+
+    it('should use UNK when to.stop.gtfsId and to.name are both absent (line 269 null-coalescing branch)', async () => {
+      const otpWithNullToName = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Paddington', stop: { gtfsId: '1:PAD' } },
+                to:   { name: null as any, stop: undefined }, // both absent → 'UNK'
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  { gtfsId: '1:202605150900001' },
+                route: { gtfsId: '1:GW' },
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithNullToName);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440023',
+        destination_crs: 'UNK',
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-05' },
+        'corr-null-to-name'
+      );
+
+      expect(result.status).toBe('matched');
+      expect(mockPersistJourney).toHaveBeenCalled();
+    });
+  });
+
+  describe('Branch coverage: buildSegments — trip/route absent → rid=null, tocCode=XX', () => {
+    it('should set rid=null when leg.trip is absent (line 273 false branch)', async () => {
+      // OTP leg with no trip property → rid stays null
+      const otpWithNoTrip = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Paddington', stop: { gtfsId: '1:PAD' } },
+                to:   { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  undefined, // absent — rid stays null
+                route: { gtfsId: '1:GW' },
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithNoTrip);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440024',
+        segments: [
+          {
+            segment_order: 1,
+            origin_crs: 'PAD',
+            destination_crs: 'CDF',
+            scheduled_departure: '2026-05-15T09:00:00.000Z',
+            scheduled_arrival: '2026-05-15T10:55:00.000Z',
+            rid: null, // no trip → null
+            toc_code: 'GW',
+          },
+        ],
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-06' },
+        'corr-no-trip'
+      );
+
+      expect(result.status).toBe('matched');
+      // Persister received segment with rid=null
+      expect(mockPersistJourney).toHaveBeenCalledWith(
+        expect.objectContaining({
+          segments: expect.arrayContaining([
+            expect.objectContaining({ rid: null }),
+          ]),
+        }),
+        expect.any(String)
+      );
+    });
+
+    it('should set toc_code=XX when leg.route is absent (line 280 false branch)', async () => {
+      // OTP leg with no route property → tocCode defaults to 'XX'
+      const otpWithNoRoute = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Paddington', stop: { gtfsId: '1:PAD' } },
+                to:   { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  { gtfsId: '1:202605150900001' },
+                route: undefined, // absent — tocCode stays 'XX'
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithNoRoute);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440025',
+        segments: [
+          {
+            segment_order: 1,
+            origin_crs: 'PAD',
+            destination_crs: 'CDF',
+            scheduled_departure: '2026-05-15T09:00:00.000Z',
+            scheduled_arrival: '2026-05-15T10:55:00.000Z',
+            rid: '202605150900001',
+            toc_code: 'XX', // no route → default
+          },
+        ],
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-07' },
+        'corr-no-route-prop'
+      );
+
+      expect(result.status).toBe('matched');
+      // Persister received segment with toc_code=XX
+      expect(mockPersistJourney).toHaveBeenCalledWith(
+        expect.objectContaining({
+          segments: expect.arrayContaining([
+            expect.objectContaining({ toc_code: 'XX' }),
+          ]),
+        }),
+        expect.any(String)
+      );
+    });
+  });
+
+  describe('Branch coverage: extractCRS — gtfsId with no colon falls back to full string', () => {
+    it('should use full gtfsId as RID when trip.gtfsId has no colon (line 275 no-colon branch)', async () => {
+      // trip.gtfsId without a colon separator — parts.length === 1, uses parts[0]
+      const otpWithBareGtfsId = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Paddington', stop: { gtfsId: '1:PAD' } },
+                to:   { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  { gtfsId: '202605150900099' }, // no colon → bare RID
+                route: { gtfsId: '1:GW' },
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithBareGtfsId);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440026',
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-08' },
+        'corr-bare-trip-gtfsid'
+      );
+
+      expect(result.status).toBe('matched');
+      // Persister received the full gtfsId as the rid (no colon → parts[0])
+      expect(mockPersistJourney).toHaveBeenCalledWith(
+        expect.objectContaining({
+          segments: expect.arrayContaining([
+            expect.objectContaining({ rid: '202605150900099' }),
+          ]),
+        }),
+        expect.any(String)
+      );
+    });
+
+    it('should use full gtfsId as toc_code when route.gtfsId has no colon (line 282 no-colon branch)', async () => {
+      // route.gtfsId without a colon separator — parts.length === 1, uses parts[0]
+      const otpWithBareTocGtfsId = {
+        itineraries: [
+          {
+            startTime: 1747299600000,
+            endTime:   1747306500000,
+            duration: 6900,
+            generalizedCost: 10000,
+            legs: [
+              {
+                mode: 'RAIL',
+                from: { name: 'London Paddington', stop: { gtfsId: '1:PAD' } },
+                to:   { name: 'Cardiff Central', stop: { gtfsId: '1:CDF' } },
+                startTime: 1747299600000,
+                endTime:   1747306500000,
+                trip:  { gtfsId: '1:202605150900001' },
+                route: { gtfsId: 'VT' }, // no colon → bare TOC code
+              },
+            ],
+          },
+        ],
+      };
+
+      mockPlanJourney.mockResolvedValue(otpWithBareTocGtfsId);
+      mockPersistJourney.mockResolvedValue({
+        ...PERSISTED_FIRST,
+        journey_id: '550e8400-e29b-41d4-a716-446655440027',
+      });
+
+      const result = await service.matchJourney(
+        { ...BASE_INPUT, departure_date: '2026-08-09' },
+        'corr-bare-route-gtfsid'
+      );
+
+      expect(result.status).toBe('matched');
+      expect(mockPersistJourney).toHaveBeenCalledWith(
+        expect.objectContaining({
+          segments: expect.arrayContaining([
+            expect.objectContaining({ toc_code: 'VT' }),
+          ]),
+        }),
+        expect.any(String)
+      );
+    });
+  });
 });
