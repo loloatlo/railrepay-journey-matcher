@@ -10,6 +10,7 @@ import { createLogger } from '@railrepay/winston-logger';
 import { PostgresClient } from '@railrepay/postgres-client';
 import { MetricsPusher, createMetricsRouter } from '@railrepay/metrics-pusher';
 import { randomUUID } from 'crypto';
+import { createMatchJourneyRouter } from './api/match-journey.handler.js';
 import { createJourneysRouter } from './api/journeys.js';
 import { createRoutesRouter } from './api/routes.js';
 import { createHealthRouter } from './api/health.js';
@@ -82,6 +83,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // Mount API routes
+// IMPORTANT: /journeys/match must be mounted BEFORE /journeys/:id to prevent
+// the match literal being captured as an :id param in the journeys router.
+app.use('/journeys', createMatchJourneyRouter(db.getPool()));
 app.use('/journeys', createJourneysRouter(db.getPool()));
 app.use('/routes', createRoutesRouter(db.getPool()));
 app.use('/health', createHealthRouter(db.getPool()));
