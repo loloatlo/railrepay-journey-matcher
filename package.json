@@ -13,7 +13,7 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
-    "start": "node --loader ts-node/esm src/index.ts",
+    "start": "node --import ./src/utils/metrics-patch.cjs --loader ts-node/esm src/index.ts",
     "migrate:up": "node-pg-migrate up -f database.json",
     "migrate:down": "node-pg-migrate down -f database.json",
     "migrate:create": "node-pg-migrate create -f database.json"
