@@ -37,17 +37,14 @@ const SCHEMA = 'journey_matcher';
 
 /** Run all migrations UP against the container.
  *
- * Uses the same npx node-pg-migrate invocation as all other integration tests
- * in this service (e.g. TD-JOURNEY-MATCHER-002-migration.test.ts). The
- * `DATABASE_URL="..."` env-var prefix syntax works on Linux/macOS (CI) but
- * fails on Windows cmd.exe — this is a known codebase limitation documented as
- * TD-JOURNEY-SCHEMA-003. Local execution on Windows uses CI for validation.
+ * Uses Node.js `env` options for cross-platform compatibility
+ * (TD-JOURNEY-SCHEMA-003 resolved 2026-04-30).
  */
 async function runMigrateUp(connectionString: string, projectRoot: string): Promise<void> {
   const migrationsDir = path.join(projectRoot, 'migrations');
   await execAsync(
-    `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-    { cwd: projectRoot }
+    `npx node-pg-migrate up -m ${migrationsDir}`,
+    { cwd: projectRoot, env: { ...process.env, DATABASE_URL: connectionString } }
   );
 }
 
@@ -55,8 +52,8 @@ async function runMigrateUp(connectionString: string, projectRoot: string): Prom
 async function runMigrateDown(connectionString: string, projectRoot: string): Promise<void> {
   const migrationsDir = path.join(projectRoot, 'migrations');
   await execAsync(
-    `DATABASE_URL="${connectionString}" npx node-pg-migrate down -m ${migrationsDir}`,
-    { cwd: projectRoot }
+    `npx node-pg-migrate down -m ${migrationsDir}`,
+    { cwd: projectRoot, env: { ...process.env, DATABASE_URL: connectionString } }
   );
 }
 

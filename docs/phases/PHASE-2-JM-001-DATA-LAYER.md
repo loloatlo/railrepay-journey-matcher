@@ -89,12 +89,10 @@ Framework: Vitest + Testcontainers PostgreSQL 17
 
 **Total: 17 tests across 5 test groups**
 
-**Local validation status**: Windows `cmd.exe` incompatibility with
-`DATABASE_URL="..." npx node-pg-migrate` inline env-var syntax prevents local
-execution. This is the same pre-existing limitation affecting all integration tests in
-this service (documented as TD-JOURNEY-SCHEMA-003). CI (ubuntu-latest) executes these
-tests correctly. Test syntax, structure and assertions are verified correct by code
-review; migration SQL is validated via Postgres MCP (see Section 3).
+**Local validation status**: TD-JOURNEY-SCHEMA-003 has been remediated (2026-04-30).
+All integration tests now pass the `DATABASE_URL` via Node.js `env` options rather
+than inline shell-prefix syntax, enabling local Windows execution. CI (ubuntu-latest)
+and local Windows environments are both supported.
 
 ---
 

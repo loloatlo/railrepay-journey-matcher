@@ -47,8 +47,8 @@ describe('TD-JOURNEY-MATCHER-002: Migration Adds Required Columns', () => {
 
     try {
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     } catch (error) {
       console.error('Migration execution:', error);
@@ -566,8 +566,8 @@ describe('TD-JOURNEY-MATCHER-002: Migration Adds Required Columns', () => {
       const migrationsDir = path.join(__dirname, '../../migrations');
       const connectionString = container.getConnectionUri();
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     });
   });

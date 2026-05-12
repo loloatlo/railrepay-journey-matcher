@@ -70,8 +70,8 @@ describe('TD-JOURNEY-MATCHER-005: Outbox Event Publishing Integration', () => {
     const connectionString = container.getConnectionUri();
 
     await execAsync(
-      `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-      { cwd: path.join(__dirname, '../..') }
+      `npx node-pg-migrate up -m ${migrationsDir}`,
+      { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
     );
 
     // Create pg Pool for handler

@@ -41,8 +41,8 @@ describe('journey_matcher schema', () => {
 
     try {
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     } catch (error) {
       console.error('Migration failed (expected if migrations not yet implemented):', error);
@@ -567,8 +567,8 @@ describe('journey_matcher schema', () => {
       // Run rollback
       try {
         await execAsync(
-          `DATABASE_URL="${connectionString}" npx node-pg-migrate down -m ${migrationsDir}`,
-          { cwd: path.join(__dirname, '../..') }
+          `npx node-pg-migrate down -m ${migrationsDir}`,
+          { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
         );
       } catch (error) {
         console.error('Rollback failed (expected if migrations not yet implemented):', error);

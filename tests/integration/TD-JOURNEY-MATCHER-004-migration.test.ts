@@ -54,8 +54,8 @@ describe('TD-JOURNEY-MATCHER-004: Migration 1739190200000 Column Addition', () =
 
     try {
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     } catch (error) {
       console.error('Migration execution:', error);
@@ -282,8 +282,8 @@ describe('TD-JOURNEY-MATCHER-004: Migration 1739190200000 Column Addition', () =
       let error: Error | null = null;
       try {
         await execAsync(
-          `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-          { cwd: path.join(__dirname, '../..') }
+          `npx node-pg-migrate up -m ${migrationsDir}`,
+          { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
         );
       } catch (err) {
         error = err as Error;

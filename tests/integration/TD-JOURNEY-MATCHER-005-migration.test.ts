@@ -47,8 +47,8 @@ describe('TD-JOURNEY-MATCHER-005: Migration Adds correlation_id Column to Outbox
 
     try {
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     } catch (error) {
       console.error('Migration execution:', error);
@@ -108,8 +108,8 @@ describe('TD-JOURNEY-MATCHER-005: Migration Adds correlation_id Column to Outbox
       // This should NOT throw an error
       await expect(
         execAsync(
-          `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-          { cwd: path.join(__dirname, '../..') }
+          `npx node-pg-migrate up -m ${migrationsDir}`,
+          { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
         )
       ).resolves.not.toThrow();
 
@@ -259,8 +259,8 @@ describe('TD-JOURNEY-MATCHER-005: Migration Adds correlation_id Column to Outbox
       const migrationsDir = path.join(__dirname, '../../migrations');
       const connectionString = container.getConnectionUri();
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     });
   });

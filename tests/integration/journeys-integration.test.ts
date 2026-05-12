@@ -38,8 +38,9 @@ describe('Journey Matcher Integration Tests', () => {
     const projectRoot = path.resolve(__dirname, '../..');
 
     try {
-      await execAsync(`DATABASE_URL="${connectionString}" npm run migrate:up`, {
+      await execAsync(`npm run migrate:up`, {
         cwd: projectRoot,
+        env: { ...process.env, DATABASE_URL: connectionString },
       });
       console.log('Migrations complete');
     } catch (error) {

@@ -226,8 +226,9 @@ describe('US-2 / RAILREPAY-JM-001 — POST /journeys/match (integration)', () =>
     pool = new Pool({ connectionString });
 
     // Run ALL migrations (including Hoops's 1745966400000 unique constraint)
-    await execAsync(`DATABASE_URL="${connectionString}" npm run migrate:up`, {
+    await execAsync(`npm run migrate:up`, {
       cwd: projectRoot,
+      env: { ...process.env, DATABASE_URL: connectionString },
     });
 
     // Allow nock to intercept HTTP calls; block unexpected real HTTP calls

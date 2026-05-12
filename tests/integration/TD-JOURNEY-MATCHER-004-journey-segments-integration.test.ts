@@ -65,8 +65,8 @@ describe('TD-JOURNEY-MATCHER-004: Migration Adds journey_segments Columns', () =
 
     try {
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     } catch (error) {
       console.error('Migration execution:', error);
@@ -175,8 +175,8 @@ describe('TD-JOURNEY-MATCHER-004: Migration Adds journey_segments Columns', () =
 
       // Act: Run migration again (should skip column addition)
       const { stdout, stderr } = await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
 
       // Assert: No errors, columns still exist

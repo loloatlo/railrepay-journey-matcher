@@ -51,8 +51,8 @@ describe('TD-JOURNEY-MATCHER-004a: Relax journey_segments NOT NULL Constraints',
 
     try {
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     } catch (error) {
       console.error('Migration execution:', error);
@@ -110,8 +110,8 @@ describe('TD-JOURNEY-MATCHER-004a: Relax journey_segments NOT NULL Constraints',
       let error: Error | null = null;
       try {
         await execAsync(
-          `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-          { cwd: path.join(__dirname, '../..') }
+          `npx node-pg-migrate up -m ${migrationsDir}`,
+          { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
         );
       } catch (err) {
         error = err as Error;

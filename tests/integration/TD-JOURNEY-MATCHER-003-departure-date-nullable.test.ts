@@ -48,8 +48,8 @@ describe('TD-JOURNEY-MATCHER-003: Relax departure_date NOT NULL Constraint', () 
 
     try {
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     } catch (error) {
       console.error('Migration execution:', error);
@@ -425,8 +425,8 @@ describe('TD-JOURNEY-MATCHER-003: Relax departure_date NOT NULL Constraint', () 
 
       try {
         await execAsync(
-          `DATABASE_URL="${connectionString}" npx node-pg-migrate down 1 -m ${migrationsDir}`,
-          { cwd: path.join(__dirname, '../..') }
+          `npx node-pg-migrate down 1 -m ${migrationsDir}`,
+          { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
         );
       } catch (error) {
         console.error('Rollback migration execution:', error);
@@ -465,8 +465,8 @@ describe('TD-JOURNEY-MATCHER-003: Relax departure_date NOT NULL Constraint', () 
 
       // Step 6: Re-apply migration to restore test environment
       await execAsync(
-        `DATABASE_URL="${connectionString}" npx node-pg-migrate up -m ${migrationsDir}`,
-        { cwd: path.join(__dirname, '../..') }
+        `npx node-pg-migrate up -m ${migrationsDir}`,
+        { cwd: path.join(__dirname, '../..'), env: { ...process.env, DATABASE_URL: connectionString } }
       );
     });
 
