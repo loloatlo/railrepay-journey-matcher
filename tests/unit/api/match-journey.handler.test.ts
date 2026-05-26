@@ -555,3 +555,319 @@ describe('US-2 / RAILREPAY-JM-001 — POST /journeys/match handler (unit)', () =
     });
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════
+// BL-301: AC-5 + AC-7 — StationResolverService integration into match handler
+//
+// ADDITIVE DESCRIBE BLOCK — Test Lock Rule applies: pre-existing tests above
+// are NOT modified. This block was added by Jessie in US-2 (2026-05-26).
+//
+// These tests mock JourneyMatcherService at the service boundary (same pattern
+// as the existing tests above). The RESOLVER is tested via the orchestrator mock
+// response — the handler never calls StationResolverService directly; that's
+// done inside JourneyMatcherService. These tests verify:
+//   AC-5: handler behaviour when orchestrator receives a CRS input (pass-through)
+//   AC-5: handler behaviour when orchestrator receives a station name input
+//   AC-7: handler returns the needs_disambiguation outcome to the caller
+//   AC-3: handler returns no_match when station name is not found
+//
+// Design rationale:
+//   The handler is a thin layer. It does NOT call StationResolverService directly.
+//   Per Phase 1 spec, StationResolverService is called inside JourneyMatcherService
+//   BEFORE OTP lookup. From the handler's perspective:
+//     - CRS input → orchestrator succeeds normally (or station_resolution_failed)
+//     - Name input → orchestrator resolves via StationResolverService → succeeds
+//     - Ambiguous name → orchestrator returns { status: 'no_match', reason: 'needs_disambiguation' }
+//     - Unknown name → orchestrator returns { status: 'no_match', reason: 'station_resolution_failed' }
+//
+// Handler HTTP contract for disambiguation (AC-7):
+//   The handler returns HTTP 200 with body { status: 'no_match', reason: 'needs_disambiguation',
+//   candidates: [...] }. This mirrors the existing no_match handling but with a new reason.
+//   Disambiguation UX is OUT OF SCOPE for this slice (separate BL item).
+//   The 200 status keeps the contract consistent with all other no_match outcomes.
+//
+// The MATCHED_RESPONSE fixture and mockMatchJourney vi.fn() from above are not
+// re-exported, so this block defines its own equivalents.
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('BL-301 (AC-5 + AC-7): match handler — resolver-aware outcomes', () => {
+  // Reuse the same mocks already declared above (shared module-level singletons)
+  // mockMatchJourney, sharedLogger, mockCounter, mockHistogram are all module-level.
+
+  const BL301_VALID_BODY_CRS = {
+    // AC-5: input is already a valid CRS code
+    user_id: 'user_bl301_crs',
+    origin_station: 'NCL',          // 3 uppercase letters — CRS pass-through
+    destination_station: 'EDB',     // CRS pass-through
+    departure_date: '2026-06-01',
+    departure_time: '10:00',
+  };
+
+  const BL301_VALID_BODY_NAME = {
+    // AC-5: input is a station name; resolver translates it to CRS
+    user_id: 'user_bl301_name',
+    origin_station: 'Newcastle',    // name — resolver returns 'NCL'
+    destination_station: 'Edinburgh', // name — resolver returns 'EDB'
+    departure_date: '2026-06-01',
+    departure_time: '10:30',
+  };
+
+  const BL301_MATCHED_NCL_EDB = {
+    journey_id: '550e8400-e29b-41d4-a716-446655440301',
+    status: 'matched' as const,
+    origin_crs: 'NCL',
+    destination_crs: 'EDB',
+    segments: [
+      {
+        segment_order: 1,
+        origin_crs: 'NCL',
+        destination_crs: 'EDB',
+        scheduled_departure: '2026-06-01T10:00:00Z',
+        scheduled_arrival: '2026-06-01T11:25:00Z',
+        rid: '202606010900301',
+        toc_code: 'VT',
+      },
+    ],
+    idempotent_replay: false,
+  };
+
+  // Reuse the module-level buildApp() factory defined in the outer describe block.
+  // buildApp() creates a fresh Express app with the correlation ID middleware and
+  // the match-journey router mounted at /journeys — same pattern as above.
+  let app: Express;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    app = buildApp();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // ── AC-5: CRS input — resolver is a no-op, OTP called directly ────────────
+
+  describe('AC-5: CRS input ("NCL") — pass-through, orchestrator succeeds', () => {
+    it('should return 200 matched when origin_station and destination_station are CRS codes', async () => {
+      // When input is already a CRS code, JourneyMatcherService (which hosts the resolver)
+      // passes it straight to OTP without a DB lookup. The handler sees a normal matched result.
+      mockMatchJourney.mockResolvedValue(BL301_MATCHED_NCL_EDB);
+
+      const res = await supertest(app)
+        .post('/journeys/match')
+        .send(BL301_VALID_BODY_CRS)
+        .set('Content-Type', 'application/json');
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('matched');
+      expect(res.body.origin_crs).toBe('NCL');
+      expect(res.body.destination_crs).toBe('EDB');
+    });
+
+    it('should call JourneyMatcherService.matchJourney with the CRS values unchanged', async () => {
+      mockMatchJourney.mockResolvedValue(BL301_MATCHED_NCL_EDB);
+
+      await supertest(app)
+        .post('/journeys/match')
+        .send(BL301_VALID_BODY_CRS)
+        .set('Content-Type', 'application/json');
+
+      expect(mockMatchJourney).toHaveBeenCalledWith(
+        expect.objectContaining({
+          origin_station: 'NCL',
+          destination_station: 'EDB',
+        }),
+        expect.any(String)
+      );
+    });
+  });
+
+  // ── AC-5: Name input — resolver translates to CRS, handler sees matched ───
+
+  describe('AC-5: station name input ("Newcastle") — resolver translates, orchestrator succeeds', () => {
+    it('should return 200 matched when origin_station is a name that resolver translates to CRS', async () => {
+      // The resolver is inside JourneyMatcherService. From the handler's POV:
+      // "Newcastle" goes in → matchJourney returns matched with origin_crs="NCL".
+      mockMatchJourney.mockResolvedValue(BL301_MATCHED_NCL_EDB);
+
+      const res = await supertest(app)
+        .post('/journeys/match')
+        .send(BL301_VALID_BODY_NAME)
+        .set('Content-Type', 'application/json');
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('matched');
+      expect(res.body.origin_crs).toBe('NCL');
+    });
+
+    it('should pass the name string unchanged to JourneyMatcherService (resolver is internal)', async () => {
+      // The handler passes origin_station/destination_station as-is to the orchestrator.
+      // Resolution happens INSIDE JourneyMatcherService, not in the handler layer.
+      mockMatchJourney.mockResolvedValue(BL301_MATCHED_NCL_EDB);
+
+      await supertest(app)
+        .post('/journeys/match')
+        .send(BL301_VALID_BODY_NAME)
+        .set('Content-Type', 'application/json');
+
+      expect(mockMatchJourney).toHaveBeenCalledWith(
+        expect.objectContaining({
+          origin_station: 'Newcastle',
+          destination_station: 'Edinburgh',
+        }),
+        expect.any(String)
+      );
+    });
+  });
+
+  // ── AC-7: Ambiguous name — handler returns needs_disambiguation outcome ────
+  //
+  // Contract decision (Jessie, 2026-05-26):
+  //   HTTP 200 with body { status: 'no_match', reason: 'needs_disambiguation',
+  //   candidates: Array<{crs_code, name, display_name}> }
+  //
+  //   Rationale: consistent with all other no_match outcomes which return 200.
+  //   Disambiguation UX is a future BL item; for now the caller can inspect
+  //   reason='needs_disambiguation' and surface candidates to the user.
+
+  describe('AC-7: ambiguous station name — handler returns needs_disambiguation to caller', () => {
+    it('should return 200 with status=no_match and reason=needs_disambiguation', async () => {
+      // Unique input: "Newcastle" matches 3 DB rows; orchestrator propagates disambiguation
+      mockMatchJourney.mockResolvedValue({
+        journey_id: null,
+        status: 'no_match' as const,
+        reason: 'needs_disambiguation' as any,
+        detail: 'Multiple stations match "Newcastle": NCL, APN, NCZ',
+        candidates: [
+          { crs_code: 'NCL', name: 'Newcastle', display_name: 'Newcastle upon Tyne' },
+          { crs_code: 'APN', name: 'Newcastle', display_name: 'Newcastle Airport' },
+          { crs_code: 'NCZ', name: 'Newcastle', display_name: 'Newcastle Central' },
+        ],
+        origin_crs: '',
+        destination_crs: '',
+        segments: [],
+        idempotent_replay: false,
+      });
+
+      const res = await supertest(app)
+        .post('/journeys/match')
+        .send({
+          user_id: 'user_bl301_ambig',
+          origin_station: 'Newcastle',  // ambiguous — 3 DB matches
+          destination_station: 'EDB',
+          departure_date: '2026-06-01',
+          departure_time: '11:00',
+        })
+        .set('Content-Type', 'application/json');
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('no_match');
+      expect(res.body.reason).toBe('needs_disambiguation');
+    });
+
+    it('should include candidates array in response body for disambiguation', async () => {
+      const candidates = [
+        { crs_code: 'NCL', name: 'Newcastle', display_name: 'Newcastle upon Tyne' },
+        { crs_code: 'APN', name: 'Newcastle', display_name: 'Newcastle Airport' },
+      ];
+
+      mockMatchJourney.mockResolvedValue({
+        journey_id: null,
+        status: 'no_match' as const,
+        reason: 'needs_disambiguation' as any,
+        detail: 'Multiple stations match',
+        candidates,
+        origin_crs: '',
+        destination_crs: '',
+        segments: [],
+        idempotent_replay: false,
+      });
+
+      const res = await supertest(app)
+        .post('/journeys/match')
+        .send({
+          user_id: 'user_bl301_ambig2',
+          origin_station: 'Newcastle',
+          destination_station: 'EDB',
+          departure_date: '2026-06-01',
+          departure_time: '11:30',
+        })
+        .set('Content-Type', 'application/json');
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.candidates)).toBe(true);
+      expect(res.body.candidates.length).toBe(2);
+      expect(res.body.candidates[0].crs_code).toBe('NCL');
+    });
+
+    it('should log outcome=no_match_station when reason=needs_disambiguation', async () => {
+      // The handler maps needs_disambiguation to outcome=no_match_station for metrics
+      // (reason field carries the detail; outcome stays consistent for existing dashboards)
+      mockMatchJourney.mockResolvedValue({
+        journey_id: null,
+        status: 'no_match' as const,
+        reason: 'needs_disambiguation' as any,
+        detail: 'Multiple stations match',
+        candidates: [
+          { crs_code: 'NCL', name: 'Newcastle', display_name: 'Newcastle upon Tyne' },
+        ],
+        origin_crs: '',
+        destination_crs: '',
+        segments: [],
+        idempotent_replay: false,
+      });
+
+      await supertest(app)
+        .post('/journeys/match')
+        .send({
+          user_id: 'user_bl301_ambig3',
+          origin_station: 'Newcastle',
+          destination_station: 'EDB',
+          departure_date: '2026-06-01',
+          departure_time: '12:00',
+        })
+        .set('Content-Type', 'application/json');
+
+      // Handler treats all no_match outcomes with logging; metrics outcome for
+      // station issues is 'no_match_station'
+      expect(sharedLogger.info).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ outcome: 'no_match_station' })
+      );
+    });
+  });
+
+  // ── AC-3: Unknown station name → no_match station_resolution_failed ────────
+
+  describe('AC-3 + AC-5: unknown station name → handler returns no_match station_resolution_failed', () => {
+    it('should return 200 with status=no_match and reason=station_resolution_failed for unknown name', async () => {
+      // When the resolver returns null (no DB match), JourneyMatcherService
+      // propagates station_resolution_failed — same existing behaviour.
+      mockMatchJourney.mockResolvedValue({
+        journey_id: null,
+        status: 'no_match' as const,
+        reason: 'station_resolution_failed',
+        detail: 'Station not found: Blarf Junction',
+        origin_crs: '',
+        destination_crs: '',
+        segments: [],
+        idempotent_replay: false,
+      });
+
+      const res = await supertest(app)
+        .post('/journeys/match')
+        .send({
+          user_id: 'user_bl301_notfound',
+          origin_station: 'Blarf Junction',  // unknown — resolver returns null
+          destination_station: 'EDB',
+          departure_date: '2026-06-01',
+          departure_time: '12:30',
+        })
+        .set('Content-Type', 'application/json');
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('no_match');
+      expect(res.body.reason).toBe('station_resolution_failed');
+    });
+  });
+});
