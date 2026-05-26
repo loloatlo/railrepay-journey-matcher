@@ -10,12 +10,15 @@ import { createLogger } from '@railrepay/winston-logger';
 import { PostgresClient } from '@railrepay/postgres-client';
 import { MetricsPusher, createMetricsRouter } from '@railrepay/metrics-pusher';
 import { randomUUID } from 'crypto';
+import { Pool } from 'pg';
+import Redis from 'ioredis';
 import { createMatchJourneyRouter } from './api/match-journey.handler.js';
 import { createJourneysRouter } from './api/journeys.js';
 import { createRoutesRouter } from './api/routes.js';
 import { createHealthRouter } from './api/health.js';
 import { createEventConsumer, EventConsumer } from './consumers/event-consumer.js';
 import { createConsumerConfig, ConsumerConfigError } from './consumers/config.js';
+import { StationResolverService } from './services/station-resolver.service.js';
 
 // Environment configuration
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -38,6 +41,36 @@ const db = new PostgresClient({
   schemaName: 'journey_matcher',
   poolSize: parseInt(process.env.DB_POOL_SIZE || '10', 10),
 });
+
+// ── Station resolver setup (BL-301, ADR-026) ──────────────────────────────────
+// Separate pool connecting with journey_matcher_role to timetable_loader schema.
+// Uses TIMETABLE_LOADER_PG_* env vars (US-1 env-var preflight, provisioned in Railway).
+let stationResolver: StationResolverService | undefined;
+
+if (
+  process.env.TIMETABLE_LOADER_PG_HOST &&
+  process.env.TIMETABLE_LOADER_PG_USER &&
+  process.env.TIMETABLE_LOADER_PG_DATABASE
+) {
+  const tlPool = new Pool({
+    host: process.env.TIMETABLE_LOADER_PG_HOST,
+    port: parseInt(process.env.TIMETABLE_LOADER_PG_PORT || '5432', 10),
+    user: process.env.TIMETABLE_LOADER_PG_USER,
+    password: process.env.TIMETABLE_LOADER_PG_PASSWORD,
+    database: process.env.TIMETABLE_LOADER_PG_DATABASE,
+    max: 5,
+  });
+
+  const redis = process.env.REDIS_URL
+    ? new Redis(process.env.REDIS_URL)
+    : new Redis();
+
+  stationResolver = new StationResolverService({
+    pool: tlPool,
+    redisClient: redis,
+    cacheTtlSecs: parseInt(process.env.STATION_RESOLVER_CACHE_TTL_SECS || '86400', 10),
+  });
+}
 
 // Initialize metrics pusher (ADR-006)
 const metricsPusher = new MetricsPusher({
@@ -85,7 +118,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // Mount API routes
 // IMPORTANT: /journeys/match must be mounted BEFORE /journeys/:id to prevent
 // the match literal being captured as an :id param in the journeys router.
-app.use('/journeys', createMatchJourneyRouter(db.getPool()));
+app.use('/journeys', createMatchJourneyRouter(db.getPool(), stationResolver));
 app.use('/journeys', createJourneysRouter(db.getPool()));
 app.use('/routes', createRoutesRouter(db.getPool()));
 app.use('/health', createHealthRouter(db.getPool()));

@@ -15,6 +15,7 @@ import { Pool } from 'pg';
 import { createLogger } from '@railrepay/winston-logger';
 import { OTPClient } from './otp-client.js';
 import { JourneyPersisterService, PersistJourneyInput, PersistJourneySegment } from './journey-persister.service.js';
+import { StationResolverService } from './station-resolver.service.js';
 import { OTPItinerary } from '../types/otp.js';
 
 // Lazy-initialised logger — deferred until first use so that
@@ -54,8 +55,9 @@ export interface MatchJourneyResultMatched {
 export interface MatchJourneyResultNoMatch {
   journey_id: null;
   status: 'no_match';
-  reason: 'station_resolution_failed' | 'no_route_found';
+  reason: 'station_resolution_failed' | 'no_route_found' | 'needs_disambiguation';
   detail?: string;
+  candidates?: Array<{ crs_code: string; name: string; display_name: string }>;
 }
 
 /**
@@ -72,13 +74,15 @@ export type MatchJourneyResult = {
   segments: PersistJourneySegment[];
   idempotent_replay: boolean;
   // no_match fields
-  reason: 'station_resolution_failed' | 'no_route_found' | undefined;
+  reason: 'station_resolution_failed' | 'no_route_found' | 'needs_disambiguation' | undefined;
   detail: string | undefined;
+  candidates?: Array<{ crs_code: string; name: string; display_name: string }>;
 };
 
 export interface JourneyMatcherServiceOptions {
   pool: Pool;
   otpRouterUrl: string;
+  stationResolver?: StationResolverService;
 }
 
 // ── Module-level dependency singletons ───────────────────────────────────────
@@ -100,6 +104,7 @@ let _persister: JourneyPersisterService | null = null;
 export class JourneyMatcherService {
   private readonly otpClient: OTPClient;
   private readonly persister: JourneyPersisterService;
+  private readonly stationResolver: StationResolverService | null;
 
   constructor(options: JourneyMatcherServiceOptions) {
     // Initialise module-level singletons on first construction so that the
@@ -112,6 +117,7 @@ export class JourneyMatcherService {
     }
     this.otpClient = _otpClient;
     this.persister = _persister;
+    this.stationResolver = options.stationResolver ?? null;
   }
 
   /**
@@ -128,14 +134,106 @@ export class JourneyMatcherService {
   ): Promise<MatchJourneyResult> {
     const journeyType = input.journey_type ?? 'single';
 
+    // ── Station resolution (BL-301) ─────────────────────────────────────────
+    // If a StationResolverService is wired in, translate station names → CRS
+    // before passing to OTP. Handles: CRS pass-through, DB lookup, ambiguity.
+    let originStation = input.origin_station;
+    let destinationStation = input.destination_station;
+
+    if (this.stationResolver !== null) {
+      const originResolved = await this.stationResolver.resolveByName(input.origin_station);
+
+      if (originResolved !== null && typeof originResolved !== 'string') {
+        // needs_disambiguation
+        getLogger().info('station disambiguation required — returning no_match', {
+          correlation_id: correlationId,
+          origin_station: input.origin_station,
+          candidates: originResolved.candidates,
+        });
+        return {
+          journey_id: null,
+          status: 'no_match' as const,
+          reason: 'needs_disambiguation' as const,
+          detail: `Multiple stations match "${input.origin_station}"`,
+          candidates: originResolved.candidates,
+          origin_crs: '',
+          destination_crs: '',
+          segments: [],
+          idempotent_replay: false,
+        };
+      }
+
+      if (originResolved === null) {
+        getLogger().info('origin station not found — returning no_match', {
+          correlation_id: correlationId,
+          origin_station: input.origin_station,
+        });
+        return {
+          journey_id: null,
+          status: 'no_match' as const,
+          reason: 'station_resolution_failed' as const,
+          detail: `Station not found: ${input.origin_station}`,
+          origin_crs: '',
+          destination_crs: '',
+          segments: [],
+          idempotent_replay: false,
+        };
+      }
+
+      // originResolved is a string CRS code
+      originStation = originResolved;
+
+      const destResolved = await this.stationResolver.resolveByName(input.destination_station);
+
+      if (destResolved !== null && typeof destResolved !== 'string') {
+        // needs_disambiguation for destination
+        getLogger().info('destination station disambiguation required — returning no_match', {
+          correlation_id: correlationId,
+          destination_station: input.destination_station,
+          candidates: destResolved.candidates,
+        });
+        return {
+          journey_id: null,
+          status: 'no_match' as const,
+          reason: 'needs_disambiguation' as const,
+          detail: `Multiple stations match "${input.destination_station}"`,
+          candidates: destResolved.candidates,
+          origin_crs: '',
+          destination_crs: '',
+          segments: [],
+          idempotent_replay: false,
+        };
+      }
+
+      if (destResolved === null) {
+        getLogger().info('destination station not found — returning no_match', {
+          correlation_id: correlationId,
+          destination_station: input.destination_station,
+        });
+        return {
+          journey_id: null,
+          status: 'no_match' as const,
+          reason: 'station_resolution_failed' as const,
+          detail: `Station not found: ${input.destination_station}`,
+          origin_crs: '',
+          destination_crs: '',
+          segments: [],
+          idempotent_replay: false,
+        };
+      }
+
+      // destResolved is a string CRS code
+      destinationStation = destResolved;
+    }
+
     let otpPlanResult: Awaited<ReturnType<OTPClient['planJourney']>>;
 
     try {
-      // Call OTP to plan journey (internally resolves station names → CRS coords → plan)
+      // Call OTP to plan journey (resolved CRS codes → plan)
       otpPlanResult = await this.otpClient.planJourney(
         {
-          from: input.origin_station,
-          to: input.destination_station,
+          from: originStation,
+          to: destinationStation,
           date: input.departure_date,
           time: input.departure_time,
         },

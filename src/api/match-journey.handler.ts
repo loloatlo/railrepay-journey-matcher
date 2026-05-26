@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { createLogger } from '@railrepay/winston-logger';
 import { getOrCreateCounter, getOrCreateHistogram } from '@railrepay/metrics-pusher';
 import { JourneyMatcherService } from '../services/journey-matcher.service.js';
+import { StationResolverService } from '../services/station-resolver.service.js';
 
 // ── Lazy-initialised singletons ───────────────────────────────────────────────
 // All module-level singletons are deferred until first use so that
@@ -90,9 +91,10 @@ let _matcherService: JourneyMatcherService | null = null;
  * Create the match-journey router.
  *
  * @param pool - pg Pool (passed to JourneyMatcherService → JourneyPersisterService)
+ * @param stationResolver - Optional StationResolverService for station name → CRS translation (BL-301)
  * @returns Express Router mounting POST /match and method guards
  */
-export function createMatchJourneyRouter(pool: Pool): Router {
+export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationResolverService): Router {
   const router = Router();
 
   // Initialise module-level service singleton on first call so the
@@ -101,7 +103,7 @@ export function createMatchJourneyRouter(pool: Pool): Router {
     const otpRouterUrl =
       process.env.OTP_ROUTER_URL ||
       'http://otp-router:8080/otp/routers/default/index/graphql';
-    _matcherService = new JourneyMatcherService({ pool, otpRouterUrl });
+    _matcherService = new JourneyMatcherService({ pool, otpRouterUrl, stationResolver });
   }
   const matcherService = _matcherService;
 
@@ -192,7 +194,7 @@ export function createMatchJourneyRouter(pool: Pool): Router {
       } else {
         // no_match
         const outcome =
-          result.reason === 'station_resolution_failed'
+          (result.reason === 'station_resolution_failed' || result.reason === 'needs_disambiguation')
             ? 'no_match_station'
             : 'no_match_route';
 
