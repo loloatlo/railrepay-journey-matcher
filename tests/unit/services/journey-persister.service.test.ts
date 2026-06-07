@@ -482,4 +482,52 @@ describe('US-2 / RAILREPAY-JM-001 — JourneyPersisterService (unit)', () => {
       expect(params).toContain('GR'); // toc_code must be present
     });
   });
+
+  // ── UUID coercion helper — valid-UUID passthrough ───────────────────────────
+  //
+  // AC: toUuidForColumn — when X-Correlation-ID is already a valid RFC-4122 UUID,
+  // it MUST pass through unchanged to outbox.correlation_id (no substitution, no log).
+  // This is the normal production path (all properly instrumented callers send real UUIDs).
+  // Self-fix test added by Jessie during US-4 re-verification (9767469 gap, 2026-06-07).
+
+  describe('UUID coercion — valid-UUID passthrough (normal production path)', () => {
+    it('should insert the real correlation UUID unchanged into outbox — no substitution, no coercion log', async () => {
+      const REAL_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+
+      const beginRes = { rows: [], rowCount: 0 };
+      const journeyInsertRes = { rows: [{ id: JOURNEY_ID }], rowCount: 1 };
+      const segmentInsertRes = { rows: [], rowCount: 1 };
+      const outboxInsertRes = { rows: [{ id: 'outbox-uuid-passthrough' }], rowCount: 1 };
+      const commitRes = { rows: [], rowCount: 0 };
+
+      queryFn
+        .mockResolvedValueOnce(beginRes)
+        .mockResolvedValueOnce(journeyInsertRes)
+        .mockResolvedValueOnce(segmentInsertRes)
+        .mockResolvedValueOnce(outboxInsertRes)
+        .mockResolvedValueOnce(commitRes);
+
+      sharedLogger.info.mockClear();
+
+      await service.persistJourney(
+        { ...BASE_SYNC_INPUT, user_id: 'user_uuid_passthrough' },
+        REAL_UUID
+      );
+
+      // Verify outbox INSERT received the real UUID unchanged
+      const outboxCall = queryFn.mock.calls.find((c) => {
+        const sql = (typeof c[0] === 'string' ? c[0] : '').toLowerCase();
+        return sql.includes('outbox') && sql.includes('insert');
+      });
+      expect(outboxCall).toBeDefined();
+      const outboxParams = outboxCall?.[1] as unknown[];
+      expect(outboxParams).toContain(REAL_UUID);
+
+      // Verify NO coercion log was emitted (passthrough means no substitution)
+      const coercionLog = sharedLogger.info.mock.calls.find((c) =>
+        typeof c[0] === 'string' && c[0].includes('non-UUID correlation_id coerced')
+      );
+      expect(coercionLog).toBeUndefined();
+    });
+  });
 });
