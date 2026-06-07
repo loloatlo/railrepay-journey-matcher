@@ -23,10 +23,21 @@
  *   is bound, not the 10:17.
  *
  * OTP endpoint mocked at:
- *   POST {OTP_ROUTER_URL}/otp/routers/default/index/graphql
- * Verified real: services/otp-router/src/test/java/com/railrepay/otprouter/JourneyPlanningApiTest.java
- *   line 47 — graphqlUrl = baseUrl + "/otp/routers/default/index/graphql"
- * Last verified: 2026-06-07 (Jessie JM-002 US-2)
+ *   POST {OTP_ROUTER_URL} (full graphql endpoint — OTPClient posts to baseURL directly via post(''))
+ *
+ * Production wiring (confirmed 2026-06-07 Jessie self-fix):
+ *   - OTP_ROUTER_URL in Railway = full graphql path, e.g. http://otp-router:8080/otp/routers/default/index/graphql
+ *   - match-journey.handler.ts line 115 default = 'http://otp-router:8080/otp/routers/default/index/graphql'
+ *   - OTPClient constructor: axios.create({ baseURL: otpUrl }) then posts to '' (empty = baseURL itself)
+ *   - Therefore nock must intercept the full graphql path, NOT just the bare host root
+ *
+ * Self-fix note (Test Lock Rule §self-fix procedure):
+ *   US-4 self-fix applied: corrected nock stub path to match OTPClient's actual request URL.
+ *   The original stub registered interceptors on the bare host root '/', but OTPClient
+ *   posts to the full graphql path because OTP_ROUTER_URL IS the full endpoint.
+ *   Behavioral assertions are unchanged — 08:56 must bind, 10:17 must not.
+ *   Origin: CI run 27087571770 / commit 21cf06a showed nock mismatch → 503.
+ *   TD Backlog: BL-XXX tracks root-cause env-var wiring documentation gap.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -61,9 +72,22 @@ function buildIntegrationApp(pool: Pool, otpRouterUrl: string): Express {
 }
 
 // ── OTP stub constants ─────────────────────────────────────────────────────
+//
+// Option A (preferred, production-realistic):
+//   OTP_ROUTER_URL = full graphql endpoint (matches Railway production config and
+//   the handler's default: 'http://otp-router:8080/otp/routers/default/index/graphql').
+//   OTPClient uses baseURL=OTP_ROUTER_URL and posts to '' (empty string),
+//   so axios resolves the request URL to OTP_ROUTER_URL itself.
+//   nock scope is the host only; stub path = the graphql path within that host.
+//
+// The original bug: OTP_BASE was the bare host and OTP_ROUTER_URL was set to the bare
+// host, so OTPClient posted to 'http://otp-jm002-integration-test:8080/' (root), but
+// nock was stubbing '/otp/routers/default/index/graphql' → no intercept match → 503.
 
-const OTP_BASE = 'http://otp-jm002-integration-test:8080';
+const OTP_NOCK_HOST  = 'http://otp-jm002-integration-test:8080';
 const OTP_GRAPHQL_PATH = '/otp/routers/default/index/graphql';
+// Full graphql URL = what OTP_ROUTER_URL must be set to (production-realistic)
+const OTP_ROUTER_URL_FULL = `${OTP_NOCK_HOST}${OTP_GRAPHQL_PATH}`;
 
 // ── YRK→KGX OTP plan fixture with 3 LNER itineraries ─────────────────────
 // Mirrors the real 2026-06-03 scenario from DR-003/BL-315 investigation.
@@ -142,8 +166,12 @@ const YRK_KGX_PLAN_RESPONSE = {
 // ── OTP stub helper ────────────────────────────────────────────────────────
 
 function stubOtpYrkKgx() {
+  // nock scope = host only; path = full graphql path.
+  // OTPClient posts to '' (baseURL = OTP_ROUTER_URL_FULL = host + path),
+  // so the effective HTTP request is POST to OTP_NOCK_HOST + OTP_GRAPHQL_PATH.
+
   // ResolveStop from (YRK)
-  nock(OTP_BASE)
+  nock(OTP_NOCK_HOST)
     .post(OTP_GRAPHQL_PATH, (body: Record<string, unknown>) =>
       typeof body?.query === 'string' && body.query.includes('ResolveStop')
     )
@@ -152,7 +180,7 @@ function stubOtpYrkKgx() {
     });
 
   // ResolveStop to (KGX)
-  nock(OTP_BASE)
+  nock(OTP_NOCK_HOST)
     .post(OTP_GRAPHQL_PATH, (body: Record<string, unknown>) =>
       typeof body?.query === 'string' && body.query.includes('ResolveStop')
     )
@@ -161,7 +189,7 @@ function stubOtpYrkKgx() {
     });
 
   // PlanJourney — returns three itineraries
-  nock(OTP_BASE)
+  nock(OTP_NOCK_HOST)
     .post(OTP_GRAPHQL_PATH, (body: Record<string, unknown>) =>
       typeof body?.query === 'string' && body.query.includes('PlanJourney')
     )
@@ -196,7 +224,9 @@ describe('RAILREPAY-JM-002 / AC-10 — YRK→KGX attested-service bind (integrat
     nock.disableNetConnect();
     nock.enableNetConnect('127.0.0.1');
 
-    app = buildIntegrationApp(pool, OTP_BASE);
+    // Pass the FULL graphql URL so OTP_ROUTER_URL mirrors production wiring.
+    // OTPClient will use this as baseURL and post to '' (= the full URL itself).
+    app = buildIntegrationApp(pool, OTP_ROUTER_URL_FULL);
   }, 180_000);
 
   afterAll(async () => {
