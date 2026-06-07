@@ -14,6 +14,7 @@
  */
 
 import { Pool } from 'pg';
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '@railrepay/winston-logger';
 
 // Lazy-initialised logger — deferred until first use so that
@@ -62,6 +63,32 @@ export interface PersistJourneyResult {
   destination_crs: string;
   segments: PersistJourneySegment[];
   idempotent_replay: boolean;
+}
+
+// ── UUID coercion helper ──────────────────────────────────────────────────────
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Ensure a value is safe to insert into a UUID column.
+ *
+ * The `outbox.correlation_id` column is typed `UUID NOT NULL`. Inbound
+ * `X-Correlation-ID` headers are arbitrary strings — if a caller sends a
+ * non-UUID value (e.g. a human-readable label or legacy trace ID) the
+ * INSERT would throw `invalid input syntax for type uuid`.
+ *
+ * Coercion rules:
+ *  - Valid UUID → returned unchanged (normal traces continue to correlate).
+ *  - Non-UUID  → a fresh randomUUID() is substituted; the original string
+ *                is returned as `originalForLog` so callers can preserve
+ *                observability.
+ */
+function toUuidForColumn(value: string): { uuid: string; originalForLog?: string } {
+  if (UUID_RE.test(value)) {
+    return { uuid: value };
+  }
+  return { uuid: randomUUID(), originalForLog: value };
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
@@ -190,6 +217,19 @@ export class JourneyPersisterService {
           ticket_type: input.ticket_type ?? null,
         };
 
+        // Coerce correlationId to a valid UUID for the outbox UUID column.
+        // Non-UUID headers (e.g. human-readable labels from tests or legacy clients)
+        // would cause `invalid input syntax for type uuid` on INSERT.
+        // The original string is preserved in the log for traceability.
+        const { uuid: outboxCorrelationId, originalForLog } = toUuidForColumn(correlationId);
+        if (originalForLog !== undefined) {
+          getLogger().info('non-UUID correlation_id coerced for outbox INSERT', {
+            original_correlation_id: originalForLog,
+            substituted_uuid: outboxCorrelationId,
+            journey_id: journeyId,
+          });
+        }
+
         // Write outbox event — exactly one per journey (AC-12)
         await client.query(
           `
@@ -202,14 +242,14 @@ export class JourneyPersisterService {
             journeyId,
             'journey.confirmed',
             JSON.stringify(outboxPayload),
-            correlationId,
+            outboxCorrelationId,
           ]
         );
 
         getLogger().info('outbox event written', {
           journey_id: journeyId,
           event_type: 'journey.confirmed',
-          correlation_id: correlationId,
+          correlation_id: outboxCorrelationId,
         });
       } else {
         getLogger().info('idempotent replay — journey already exists', {
