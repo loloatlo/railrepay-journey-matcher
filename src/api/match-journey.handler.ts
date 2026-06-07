@@ -76,6 +76,16 @@ const matchJourneySchema = z.object({
     .regex(/^\d{2}:\d{2}$/, 'departure_time must be HH:MM format'),
   journey_type: z.enum(['single', 'return']).default('single'),
   scan_id: z.string().uuid('scan_id must be a valid UUID').optional(),
+  // JM-002: Anytime/Any-Permitted ticket attestation fields (AC-1)
+  ticket_type: z.string().min(1, 'ticket_type must not be blank when present').optional(),
+  actual_departure_time: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/, 'actual_departure_time must be HH:MM format')
+    .optional(),
+  actual_rid: z
+    .string()
+    .refine((val) => val.trim().length > 0, { message: 'actual_rid must not be blank when present' })
+    .optional(),
 });
 
 // ── Module-level service singleton ───────────────────────────────────────────
@@ -157,6 +167,10 @@ export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationRe
 
     const body = parseResult.data;
 
+    // ── JM-002 observability fields (AC-11) ─────────────────────────────────
+    const attested = body.actual_rid !== undefined;
+    const ticketTypeForLog = body.ticket_type ?? null;
+
     // ── Orchestrate ──────────────────────────────────────────────────────────
     try {
       const result = await matcherService.matchJourney(
@@ -168,6 +182,10 @@ export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationRe
           departure_time: body.departure_time,
           journey_type: body.journey_type,
           scan_id: body.scan_id,
+          // JM-002: attestation fields (AC-1)
+          ticket_type: body.ticket_type,
+          actual_departure_time: body.actual_departure_time,
+          actual_rid: body.actual_rid,
         },
         correlationId
       );
@@ -185,6 +203,29 @@ export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationRe
           outcome,
           duration_ms: durationMs,
           idempotent_replay: result.idempotent_replay,
+          // AC-11: attestation observability
+          ticket_type: ticketTypeForLog,
+          attested,
+        });
+
+        getCounter().inc({ outcome });
+        getHistogram().observe({ outcome }, durationMs / 1000);
+
+        res.status(200).json(result);
+      } else if (result.status === 'candidates') {
+        // JM-002: Any-Permitted no-attestation path — return candidate list (AC-2)
+        const outcome = 'candidates';
+
+        getLog().info('POST /journeys/match returned candidates', {
+          correlation_id: correlationId,
+          user_id: body.user_id,
+          origin_station: body.origin_station,
+          destination_station: body.destination_station,
+          outcome,
+          duration_ms: durationMs,
+          // AC-11: attestation observability
+          ticket_type: ticketTypeForLog,
+          attested,
         });
 
         getCounter().inc({ outcome });
@@ -206,6 +247,9 @@ export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationRe
           outcome,
           reason: result.reason,
           duration_ms: durationMs,
+          // AC-11: attestation observability
+          ticket_type: ticketTypeForLog,
+          attested,
         });
 
         getCounter().inc({ outcome });

@@ -41,6 +41,10 @@ export interface MatchJourneyInput {
   departure_time: string;
   journey_type?: 'single' | 'return';
   scan_id?: string;
+  // JM-002: Anytime/Any-Permitted ticket attestation (AC-1/AC-2/AC-3)
+  ticket_type?: string;
+  actual_departure_time?: string;
+  actual_rid?: string;
 }
 
 export interface MatchJourneyResultMatched {
@@ -60,6 +64,20 @@ export interface MatchJourneyResultNoMatch {
   candidates?: Array<{ crs_code: string; name: string; display_name: string }>;
 }
 
+/** JM-002: Candidate list shape returned for Any-Permitted tickets without attestation (AC-2) */
+export interface MatchJourneyCandidateItem {
+  rid: string;
+  scheduled_departure: string;
+  toc_code?: string;
+}
+
+/** JM-002: Result variant when ticket_type=anytime and no attestation (AC-2) */
+export interface MatchJourneyResultCandidates {
+  journey_id: null;
+  status: 'candidates';
+  candidates: MatchJourneyCandidateItem[];
+}
+
 /**
  * Combined result type with all fields to allow direct property access in test
  * assertions without discriminant narrowing. `status` is the discriminator.
@@ -67,7 +85,7 @@ export interface MatchJourneyResultNoMatch {
  */
 export type MatchJourneyResult = {
   journey_id: string | null;
-  status: 'matched' | 'no_match';
+  status: 'matched' | 'no_match' | 'candidates';
   // matched fields
   origin_crs: string;
   destination_crs: string;
@@ -76,7 +94,7 @@ export type MatchJourneyResult = {
   // no_match fields
   reason: 'station_resolution_failed' | 'no_route_found' | 'needs_disambiguation' | undefined;
   detail: string | undefined;
-  candidates?: Array<{ crs_code: string; name: string; display_name: string }>;
+  candidates?: Array<{ crs_code: string; name: string; display_name: string } | MatchJourneyCandidateItem>;
 };
 
 export interface JourneyMatcherServiceOptions {
@@ -288,22 +306,110 @@ export class JourneyMatcherService {
       throw upstreamErr;
     }
 
-    // Select best itinerary (lowest generalizedCost, falling back to first)
-    const bestItinerary = this.selectBestItinerary(otpPlanResult.itineraries);
-
-    getLogger().info('OTP plan succeeded, persisting journey', {
+    getLogger().info('OTP plan succeeded, selecting itinerary', {
       correlation_id: correlationId,
       itinerary_count: otpPlanResult.itineraries.length,
       origin_station: input.origin_station,
       destination_station: input.destination_station,
+      ticket_type: input.ticket_type ?? null,
+      attested: input.actual_rid !== undefined,
+    });
+
+    // ── JM-002: Routing logic (DR-003) ─────────────────────────────────────
+    // Any-Permitted ticket + NO attestation → return candidate list (AC-2)
+    // Constraint 1: candidate list from OTP timetable data ONLY — no delay data.
+    const isAnytime = input.ticket_type === 'anytime' || input.ticket_type === 'any_permitted';
+    const hasAttestation = input.actual_rid !== undefined || input.actual_departure_time !== undefined;
+
+    if (isAnytime && !hasAttestation) {
+      // AC-2: return candidates ordered by scheduled time (startTime), NOT delay
+      const sortedItineraries = [...otpPlanResult.itineraries].sort(
+        (a, b) => a.startTime - b.startTime
+      );
+
+      const candidates: MatchJourneyCandidateItem[] = sortedItineraries.map((itin) => {
+        const firstLeg = itin.legs[0];
+        let rid = '';
+        if (firstLeg?.trip?.gtfsId) {
+          const parts = firstLeg.trip.gtfsId.split(':');
+          rid = parts.length > 1 ? parts[1] : parts[0];
+        }
+        let tocCode = 'XX';
+        if (firstLeg?.route?.gtfsId) {
+          const parts = firstLeg.route.gtfsId.split(':');
+          tocCode = parts.length > 1 ? parts[1] : parts[0];
+        }
+        const scheduledDeparture = new Date(itin.startTime).toISOString();
+
+        return { rid, scheduled_departure: scheduledDeparture, toc_code: tocCode };
+      });
+
+      getLogger().info('Any-Permitted ticket: returning candidate list (no attestation)', {
+        correlation_id: correlationId,
+        candidate_count: candidates.length,
+        ticket_type: input.ticket_type,
+        attested: false,
+        outcome: 'candidates',
+      });
+
+      return {
+        journey_id: null,
+        status: 'candidates' as const,
+        candidates,
+        origin_crs: '',
+        destination_crs: '',
+        segments: [],
+        idempotent_replay: false,
+        reason: undefined,
+        detail: undefined,
+      };
+    }
+
+    // ── Select itinerary ────────────────────────────────────────────────────
+    // AC-3: attestation supplied → bind to the itinerary matching actual_rid.
+    // AC-4: fallback to lowest generalizedCost (existing behaviour) when no attestation.
+    let selectedItinerary: OTPItinerary;
+
+    if (hasAttestation && input.actual_rid) {
+      // AC-3: find the itinerary whose first rail leg matches actual_rid
+      const attestedRid = input.actual_rid;
+      const attestedItinerary = otpPlanResult.itineraries.find((itin) => {
+        return itin.legs.some((leg) => {
+          if (!leg.trip?.gtfsId) return false;
+          const parts = leg.trip.gtfsId.split(':');
+          const rid = parts.length > 1 ? parts[1] : parts[0];
+          return rid === attestedRid;
+        });
+      });
+
+      if (attestedItinerary) {
+        selectedItinerary = attestedItinerary;
+      } else {
+        // Attestation RID not found in OTP plan — fall back to generalizedCost
+        getLogger().warn('Attested RID not found in OTP itineraries — falling back to generalizedCost', {
+          correlation_id: correlationId,
+          actual_rid: attestedRid,
+        });
+        selectedItinerary = this.selectBestItinerary(otpPlanResult.itineraries);
+      }
+    } else {
+      // AC-4: no attestation → lowest generalizedCost (preserved fallback)
+      selectedItinerary = this.selectBestItinerary(otpPlanResult.itineraries);
+    }
+
+    getLogger().info('Itinerary selected, persisting journey', {
+      correlation_id: correlationId,
+      ticket_type: input.ticket_type ?? null,
+      attested: hasAttestation,
+      outcome: 'matched',
     });
 
     // Build segments from itinerary legs
-    const segments = this.buildSegments(bestItinerary);
+    const segments = this.buildSegments(selectedItinerary);
 
     // Derive CRS codes from the first and last leg
-    const firstLeg = bestItinerary.legs[0];
-    const lastLeg = bestItinerary.legs[bestItinerary.legs.length - 1];
+    const firstLeg = selectedItinerary.legs[0];
+    const lastLeg = selectedItinerary.legs[selectedItinerary.legs.length - 1];
     const originCrs = firstLeg?.from?.stop?.gtfsId
       ? extractCRS(firstLeg.from.stop.gtfsId)
       : input.origin_station.substring(0, 3).toUpperCase();
@@ -312,8 +418,8 @@ export class JourneyMatcherService {
       : input.destination_station.substring(0, 3).toUpperCase();
 
     // Derive departure and arrival datetimes from itinerary
-    const departureDatetime = new Date(bestItinerary.startTime).toISOString();
-    const arrivalDatetime = new Date(bestItinerary.endTime).toISOString();
+    const departureDatetime = new Date(selectedItinerary.startTime).toISOString();
+    const arrivalDatetime = new Date(selectedItinerary.endTime).toISOString();
 
     const persistInput: PersistJourneyInput = {
       user_id: input.user_id,
@@ -323,6 +429,8 @@ export class JourneyMatcherService {
       arrival_datetime: arrivalDatetime,
       journey_type: journeyType,
       segments,
+      // AC-6: ticket fields populated (latent NULL fix)
+      ticket_type: input.ticket_type ?? null,
     };
 
     const persisted = await this.persister.persistJourney(persistInput, correlationId);
