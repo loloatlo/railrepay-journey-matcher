@@ -22,6 +22,7 @@ export interface OTPLeg {
   };
   route?: {
     gtfsId: string; // Maps to TOC code
+    agency?: { name: string }; // T2 Defect A (BL-315): operator name from OTP agency data
   };
 }
 

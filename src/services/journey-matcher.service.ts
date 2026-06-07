@@ -69,6 +69,7 @@ export interface MatchJourneyCandidateItem {
   rid: string;
   scheduled_departure: string;
   toc_code?: string;
+  operator_name?: string; // T2 Defect A (BL-315): from firstLeg.route.agency.name
 }
 
 /** JM-002: Result variant when ticket_type=anytime and no attestation (AC-2) */
@@ -340,8 +341,16 @@ export class JourneyMatcherService {
           tocCode = parts.length > 1 ? parts[1] : parts[0];
         }
         const scheduledDeparture = new Date(itin.startTime).toISOString();
+        // T2 Defect A (BL-315): include operator_name from OTP agency data when available.
+        // The PWA uses this to display a human-readable operator label instead of raw toc_code.
+        const operatorName: string | undefined = firstLeg?.route?.agency?.name ?? undefined;
 
-        return { rid, scheduled_departure: scheduledDeparture, toc_code: tocCode };
+        return {
+          rid,
+          scheduled_departure: scheduledDeparture,
+          toc_code: tocCode,
+          ...(operatorName !== undefined ? { operator_name: operatorName } : {}),
+        };
       });
 
       getLogger().info('Any-Permitted ticket: returning candidate list (no attestation)', {
