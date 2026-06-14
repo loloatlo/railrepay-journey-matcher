@@ -323,10 +323,52 @@ export class JourneyMatcherService {
     const hasAttestation = input.actual_rid !== undefined || input.actual_departure_time !== undefined;
 
     if (isAnytime && !hasAttestation) {
-      // AC-2: return candidates ordered by scheduled time (startTime), NOT delay
-      const sortedItineraries = [...otpPlanResult.itineraries].sort(
-        (a, b) => a.startTime - b.startTime
-      );
+      // JM-003: AC-1/AC-2/AC-3 — bound to 3 schedule-closest, delay-agnostic selection.
+
+      // Step 1: capture pre-bound pool size (AC-7 log field).
+      const candidatePoolSize = otpPlanResult.itineraries.length;
+
+      // Step 2: compute enteredEpoch — the UTC epoch-ms at which the user's entered
+      // departure_time (HH:MM, Europe/London local) falls on the service date.
+      //
+      // We derive the service date from the OTP itineraries' startTime (UTC) rather than
+      // from input.departure_date. This is semantically correct: OTP was queried with
+      // departure_date and returns startTimes on that date; extracting the date from the
+      // itinerary ensures alignment regardless of how departure_date was formatted.
+      //
+      // For the zero-itinerary case (candidatePoolSize=0), we fall back to a sentinel
+      // that places enteredEpoch at the approximate midpoint of the input date to preserve
+      // graceful zero-candidate handling (AC-5).
+      let enteredEpoch: number;
+      if (candidatePoolSize > 0) {
+        // Extract the UTC date string (YYYY-MM-DD) from the first itinerary's startTime.
+        const firstItin = otpPlanResult.itineraries[0];
+        const refDate = new Date(firstItin.startTime);
+        const refDateStr = [
+          refDate.getUTCFullYear(),
+          String(refDate.getUTCMonth() + 1).padStart(2, '0'),
+          String(refDate.getUTCDate()).padStart(2, '0'),
+        ].join('-');
+        enteredEpoch = euroLondonLocalToUTCEpoch(refDateStr, input.departure_time);
+      } else {
+        // Zero itineraries — use departure_date + departure_time as fallback.
+        enteredEpoch = euroLondonLocalToUTCEpoch(input.departure_date, input.departure_time);
+      }
+
+      // Step 3: sort all itineraries by abs(startTime - enteredEpoch) ascending.
+      // Ties broken by startTime ascending (earlier scheduled departure wins).
+      const byCloseness = [...otpPlanResult.itineraries].sort((a, b) => {
+        const diffA = Math.abs(a.startTime - enteredEpoch);
+        const diffB = Math.abs(b.startTime - enteredEpoch);
+        if (diffA !== diffB) return diffA - diffB;
+        return a.startTime - b.startTime;
+      });
+
+      // Step 4: take the first min(3, length) by closeness.
+      const selected = byCloseness.slice(0, Math.min(3, byCloseness.length));
+
+      // Step 5: re-sort selected by startTime ascending (select-by-closeness, display ascending).
+      const sortedItineraries = selected.sort((a, b) => a.startTime - b.startTime);
 
       const candidates: MatchJourneyCandidateItem[] = sortedItineraries.map((itin) => {
         const firstLeg = itin.legs[0];
@@ -353,9 +395,11 @@ export class JourneyMatcherService {
         };
       });
 
+      // AC-7: log both candidate_count (bounded ≤3) AND candidate_pool_size (pre-bound pool).
       getLogger().info('Any-Permitted ticket: returning candidate list (no attestation)', {
         correlation_id: correlationId,
         candidate_count: candidates.length,
+        candidate_pool_size: candidatePoolSize,
         ticket_type: input.ticket_type,
         attested: false,
         outcome: 'candidates',
@@ -519,4 +563,65 @@ export class JourneyMatcherService {
 function extractCRS(gtfsId: string): string {
   const parts = gtfsId.split(':');
   return parts.length > 1 ? parts[1] : parts[0];
+}
+
+/**
+ * Convert a Europe/London local date+time to a UTC epoch-ms value.
+ *
+ * JM-003 (AC-2, TD-BL315-F): the entered departure_time (HH:MM) is local
+ * Europe/London time. OTP startTime is epoch-ms (UTC). To compare correctly,
+ * we must convert the entered local time to UTC accounting for BST/GMT.
+ *
+ * Algorithm (no external tz library required — uses Intl IANA support):
+ *   1. Treat the input date+time as if it were UTC → approxEpoch.
+ *   2. Ask Intl.DateTimeFormat what Europe/London shows at approxEpoch → londonEpoch.
+ *   3. Offset = londonEpoch - approxEpoch (positive in BST = UTC+1).
+ *   4. enteredEpoch = approxEpoch - offset = 2 * approxEpoch - londonEpoch.
+ *
+ * Verification (BST example):
+ *   input: "2026-06-03", "08:00"
+ *   approxEpoch = Date.UTC(2026,5,3,8,0) = T08:00Z
+ *   London at T08:00Z = 09:00 BST → londonEpoch = T09:00Z
+ *   offset = +3600000 (1h, UTC+1)
+ *   enteredEpoch = T08:00Z - 1h = T07:00Z ✓  (08:00 BST = 07:00 UTC)
+ *
+ * Verification (GMT example):
+ *   input: "2026-01-15", "08:00"
+ *   approxEpoch = T08:00Z; London at T08:00Z = 08:00 GMT → londonEpoch = T08:00Z
+ *   offset = 0; enteredEpoch = T08:00Z ✓
+ */
+function euroLondonLocalToUTCEpoch(dateStr: string, timeStr: string): number {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const [hour, minute] = timeStr.split(':').map(Number);
+
+  // Step 1: approximate UTC epoch treating the local time as if it were UTC.
+  const approxEpoch = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+
+  // Step 2: ask what Europe/London clock shows at approxEpoch.
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(new Date(approxEpoch));
+  const get = (type: string): number =>
+    Number(parts.find((p) => p.type === type)?.value ?? '0');
+
+  // Build London epoch (what the London clock shows, expressed as UTC epoch):
+  const londonEpoch = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour'),
+    get('minute'),
+    get('second')
+  );
+
+  // Step 3+4: offset = londonEpoch - approxEpoch; enteredEpoch = approxEpoch - offset.
+  return 2 * approxEpoch - londonEpoch;
 }
