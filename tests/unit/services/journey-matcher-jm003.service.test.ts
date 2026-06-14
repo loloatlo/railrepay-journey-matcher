@@ -72,12 +72,10 @@ import { JourneyMatcherService } from '../../../src/services/journey-matcher.ser
 // ─────────────────────────────────────────────────────────────────────────────
 // FIXTURES
 //
-// Route: YRK → KGX, service date 2026-06-03 (summer → BST = UTC+1).
-// Entered time: 08:00 local BST (i.e. 07:00 UTC = 1748930400000 epoch-ms? No:
-//   2026-06-03T07:00:00Z = Unix:
-//   2026-06-03 is the 154th day of 2026.  Let's pin concrete epochs:
+// Route: YRK → KGX, service date 2025-06-03 (summer → BST = UTC+1).
+// Entered time: 08:00 local BST (i.e. 07:00 UTC).
 //
-// Reference point: 2026-06-03T00:00:00Z = 1748908800000
+// Reference point: 2025-06-03T00:00:00Z = 1748908800000
 // Each minute = 60000 ms.
 //
 // Services we want (all times in BST = UTC+1 local, shown as UTC for epoch):
@@ -88,7 +86,7 @@ import { JourneyMatcherService } from '../../../src/services/journey-matcher.ser
 //   Service E: scheduled 08:00 UTC = 09:00 BST (offset: +60 min = 3600s)
 //   Service F: scheduled 08:30 UTC = 09:30 BST (offset: +90 min = 5400s)
 //
-// Entered time: "08:00" local BST on 2026-06-03 = 2026-06-03T07:00:00Z
+// Entered time: "08:00" local BST on 2025-06-03 = 2025-06-03T07:00:00Z
 // Entered epoch: 1748908800000 + 7*3600*1000 = 1748908800000 + 25200000 = 1748934000000
 //
 // Closeness ranking (abs diff vs entered epoch 1748934000000):
@@ -103,10 +101,14 @@ import { JourneyMatcherService } from '../../../src/services/journey-matcher.ser
 // So the CORRECT 3 closest are: C, B, D
 // (or by ascending sort after selection: B, C, D)
 //
-// A NAIVE UTC-naive comparison would be fine here since both entered time and OTP times
-// are handled consistently. The tz-sensitivity trap is if Blake parses departure_time
-// "08:00" as UTC (treating it as 2026-06-03T08:00:00Z = epoch 1748937600000, which is
-// actually 09:00 BST) — then the "entered epoch" is wrong by +1h and selects different 3:
+// TZ-SENTINEL: The test uses the same departure_date as the itinerary epochs (2025-06-03).
+// Blake's implementation extracts the date from the FIRST OTP itinerary's startTime (UTC),
+// which correctly yields '2025-06-03'. This keeps the enteredEpoch on the same calendar day
+// as the itinerary epochs, making the closeness ranking meaningful.
+//
+// The tz-sensitivity trap is if the implementation treats departure_time "08:00" as UTC
+// (treating it as 2025-06-03T08:00:00Z = epoch 1748937600000 = 09:00 BST) —
+// then the "entered epoch" is wrong by +1h and selects different 3:
 //   naive-UTC entered: 1748937600000 (= 09:00 BST)
 //   vs E (08:00 UTC = 09:00 BST): diff=0   ← wrong winner
 //   vs D (07:30 UTC = 08:30 BST): diff=1800000
@@ -117,8 +119,8 @@ import { JourneyMatcherService } from '../../../src/services/journey-matcher.ser
 // naive-UTC wrong 3 {E, D, F} are NOT.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Epoch anchors (2026-06-03 BST = UTC+1)
-const BASE_EPOCH = 1748908800000; // 2026-06-03T00:00:00Z
+// Epoch anchors (2025-06-03 BST = UTC+1)
+const BASE_EPOCH = 1748908800000; // 2025-06-03T00:00:00Z
 const SERVICE_A_EPOCH = BASE_EPOCH + 6 * 3600_000;   // 06:00Z = 07:00 BST
 const SERVICE_B_EPOCH = BASE_EPOCH + 6.5 * 3600_000; // 06:30Z = 07:30 BST
 const SERVICE_C_EPOCH = BASE_EPOCH + 7 * 3600_000;   // 07:00Z = 08:00 BST  (exact match to 08:00 BST entered)
@@ -218,7 +220,7 @@ const BASE_ANYTIME_INPUT = {
   user_id: 'user_jm003_test',
   origin_station: 'YRK',
   destination_station: 'KGX',
-  departure_date: '2026-06-03',
+  departure_date: '2025-06-03', // matches BASE_EPOCH (2025-06-03T00:00:00Z = 1748908800000)
   departure_time: '08:00', // local BST (Europe/London) — 07:00 UTC
   journey_type: 'single' as const,
   ticket_type: 'anytime',
@@ -422,11 +424,11 @@ describe('RAILREPAY-JM-003 — JourneyMatcherService candidate bounding (unit)',
 
     // ── AC-2 TZ-SENSITIVE test (TD-BL315-F) ───────────────────────────────
     //
-    // Date: 2026-06-03, BST (UTC+1).
+    // Date: 2025-06-03, BST (UTC+1). Epochs are in 2025 (consistent with BASE_EPOCH).
     // Entered departure time: "08:00" (local BST) = 07:00 UTC.
     //
     // A NAIVE implementation that treats "08:00" as UTC (not BST) would compute
-    // the entered epoch as 2026-06-03T08:00:00Z = SERVICE_E_EPOCH (= 09:00 BST).
+    // the entered epoch as 2025-06-03T08:00:00Z = SERVICE_E_EPOCH (= 09:00 BST).
     // Under the naive UTC interpretation the ranking changes completely:
     //   naive "entered UTC epoch" = SERVICE_E_EPOCH (08:00Z = 09:00 BST)
     //   E (08:00Z): diff=0       ← naive wrong closest
@@ -459,7 +461,7 @@ describe('RAILREPAY-JM-003 — JourneyMatcherService candidate bounding (unit)',
         {
           ...BASE_ANYTIME_INPUT,
           user_id: 'user_jm003_ac2_tz_sensitive',
-          departure_date: '2026-06-03',
+          departure_date: '2025-06-03', // consistent with BASE_EPOCH (2025-06-03T00:00:00Z)
           departure_time: '08:00', // BST local — MUST be treated as 07:00 UTC for closeness
         },
         'corr-jm003-ac2-tz'
