@@ -355,19 +355,40 @@ export class JourneyMatcherService {
         enteredEpoch = euroLondonLocalToUTCEpoch(input.departure_date, input.departure_time);
       }
 
-      // Step 3: sort all itineraries by abs(startTime - enteredEpoch) ascending.
+      // Step 3 (SS1a BL-336): dedup itineraries by first-leg RID before closeness sort.
+      // Multi-leg routes can produce multiple OTP itineraries sharing the same first-leg
+      // train (different onward connections at an interchange). We keep the FIRST occurrence
+      // of each distinct first-leg RID (original OTP array order). Itineraries with no
+      // first-leg RID (walk, no trip) are each treated as distinct — not collapsed.
+      const seenFirstLegRids = new Set<string>();
+      const distinctItineraries = otpPlanResult.itineraries.filter((itin) => {
+        const firstLeg = itin.legs[0];
+        if (!firstLeg?.trip?.gtfsId) {
+          // No RID on first leg → treat as distinct (don't collapse)
+          return true;
+        }
+        const ridParts = firstLeg.trip.gtfsId.split(':');
+        const firstLegRid = ridParts.length > 1 ? ridParts[1] : ridParts[0];
+        if (seenFirstLegRids.has(firstLegRid)) {
+          return false; // duplicate first-leg RID — drop
+        }
+        seenFirstLegRids.add(firstLegRid);
+        return true;
+      });
+
+      // Step 4: sort DISTINCT itineraries by abs(startTime - enteredEpoch) ascending.
       // Ties broken by startTime ascending (earlier scheduled departure wins).
-      const byCloseness = [...otpPlanResult.itineraries].sort((a, b) => {
+      const byCloseness = [...distinctItineraries].sort((a, b) => {
         const diffA = Math.abs(a.startTime - enteredEpoch);
         const diffB = Math.abs(b.startTime - enteredEpoch);
         if (diffA !== diffB) return diffA - diffB;
         return a.startTime - b.startTime;
       });
 
-      // Step 4: take the first min(3, length) by closeness.
-      const selected = byCloseness.slice(0, Math.min(3, byCloseness.length));
+      // Step 5: take the first min(3, distinct count) by closeness.
+      const selected = byCloseness.slice(0, Math.min(3, distinctItineraries.length));
 
-      // Step 5: re-sort selected by startTime ascending (select-by-closeness, display ascending).
+      // Step 6: re-sort selected by startTime ascending (select-by-closeness, display ascending).
       const sortedItineraries = selected.sort((a, b) => a.startTime - b.startTime);
 
       const candidates: MatchJourneyCandidateItem[] = sortedItineraries.map((itin) => {
