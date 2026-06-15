@@ -612,7 +612,6 @@ describe('BL-336 SS2 — JourneyMatcherService: intended-itinerary bind (unit)',
           journey_type: 'single' as const,
           ticket_type: 'anytime',
           actual_rid: LEG1_RID,
-          // @ts-expect-error — intended_legs not yet on MatchJourneyInput; Blake adds in US-3 (BL-336 SS2)
           intended_legs: [
             { segment_order: 2, rid: '202606150935WALK' },
           ],
@@ -647,7 +646,6 @@ describe('BL-336 SS2 — JourneyMatcherService: intended-itinerary bind (unit)',
           journey_type: 'single' as const,
           ticket_type: 'anytime',
           actual_rid: LEG1_RID,
-          // @ts-expect-error — intended_legs not yet on MatchJourneyInput; Blake adds in US-3 (BL-336 SS2)
           intended_legs: [
             { segment_order: 2, rid: '202606150935WALK' },
           ],
@@ -687,7 +685,6 @@ describe('BL-336 SS2 — JourneyMatcherService: intended-itinerary bind (unit)',
           journey_type: 'single' as const,
           ticket_type: 'anytime',
           actual_rid: LEG1_RID,
-          // @ts-expect-error — intended_legs not yet on MatchJourneyInput; Blake adds in US-3 (BL-336 SS2)
           intended_legs: [
             { segment_order: 2, rid: '202606150935WALK' },
           ],
@@ -730,7 +727,6 @@ describe('BL-336 SS2 — JourneyMatcherService: intended-itinerary bind (unit)',
           journey_type: 'single' as const,
           ticket_type: 'anytime',
           actual_rid: LEG1_RID,
-          // @ts-expect-error — intended_legs not yet on MatchJourneyInput; Blake adds in US-3 (BL-336 SS2)
           intended_legs: [{ segment_order: 2, rid: '202606150935WALK' }],
         },
         'corr-ss2-ac2-invariant',
