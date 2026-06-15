@@ -871,12 +871,26 @@ describe('BL-336 SS1b — JourneyMatcherService: intended onward plan derivation
   // Only legs with a RID (rail legs) generate entries.
   //
   // Fixture: WALK_LEG_PLAN has legs=[RAIL, WALK, RAIL].
-  // Expected intended_itinerary: 1 entry (the second RAIL leg, segment_order=3).
-  //   Wait — segment_order must be 1-indexed by position in the FULL leg array.
-  //   legs[0] = RAIL (attested leg1, segment_order=1).
-  //   legs[1] = WALK (no RID → skipped).
-  //   legs[2] = RAIL (onward, segment_order=3 → index+1 = 2+1 = 3).
-  // FAILS NOW — status wrong.
+  // Expected intended_itinerary: 1 entry (the second RAIL leg).
+  //
+  // SS2 AC-7 AUTHOR-UPDATE (Jessie, 2026-06-15 — Test Lock Rule self-fix):
+  //   The original comment below said segment_order=3 (gapped, from OTP-leg-index+1).
+  //   SS2 locks the CONTIGUOUS-RAIL DENSE convention: the WALK leg does NOT count
+  //   toward segment_order numbering. The onward RAIL leg becomes segment_order=2
+  //   (dense: leg-1=1, first-onward-rail=2), NOT segment_order=3 (gapped).
+  //
+  //   This is a deliberate spec change confirmed by Quinn in SS2 US-1:
+  //     "segment_order convention = CONTIGUOUS-RAIL, 1-indexed. journey_segments stores
+  //      ONLY rail (RID-bearing) legs, numbered 1..N, NO gaps, NO walk rows."
+  //
+  //   The intended_itinerary response's segment_order must match what will be persisted
+  //   in journey_segments (so the SLW can use it as a baseline). A gapped segment_order
+  //   in the onward_plan response would be inconsistent with the dense bind in SS2.
+  //
+  //   Change: added explicit segment_order assertion below (AC-5: segment_order=2 not 3).
+  //   The test body now explicitly asserts the DENSE numbering.
+  //
+  // FAILS NOW — status wrong AND segment_order returned is 3 (gapped).
 
   describe('AC-5: Skip non-rail legs (WALK legs produce no intended_itinerary entry)', () => {
     it('AC-5: a WALK leg between two RAIL legs produces no entry in intended_itinerary', async () => {
@@ -915,6 +929,42 @@ describe('BL-336 SS1b — JourneyMatcherService: intended onward plan derivation
       }>;
       expect(itinerary).toBeDefined();
       expect(itinerary[0]?.planned.rid).toBe(ONWARD_A_RID);
+    });
+
+    it('AC-5 / SS2-AC-7: onward RAIL leg after WALK has segment_order=2 (DENSE, not 3/gapped)', async () => {
+      // AC-5 / SS2 AC-7 AUTHOR-UPDATE: The original spec used gapped numbering (index+1),
+      // giving segment_order=3 for legs[2] in a [RAIL, WALK, RAIL] itinerary.
+      // SS2 locks the CONTIGUOUS-RAIL DENSE convention: WALK is not counted, so
+      // the onward RAIL leg is segment_order=2 (first-onward-rail after leg-1).
+      //
+      // This test was NOT present in the original SS1b RED commit. It is added here
+      // as an author-update (Jessie) per the Test Lock Rule self-fix procedure because:
+      //   - The semantic requirement changed (gapped → dense, locked by SS2 US-1)
+      //   - The fix does NOT relax the behavioral assertion; it corrects it
+      //   - Committed standalone before Blake's SS2 US-3
+      //
+      // FAILS NOW — the onward_plan branch uses idx+1 (raw loop index) → returns 3.
+      // After SS2 fix: onward_plan branch must use CONTIGUOUS-RAIL counter → returns 2.
+      mockPlanJourney.mockResolvedValue(WALK_LEG_PLAN);
+
+      const result = await service.matchJourney(
+        { ...BASE_ONWARD_PLAN_INPUT, user_id: 'user_ss1b_ac5_dense_order' },
+        'corr-ss1b-ac5-dense-order',
+      );
+
+      const itinerary = (result as any).intended_itinerary as Array<{
+        segment_order: number;
+        planned: { rid: string };
+        alternatives: unknown[];
+      }>;
+      expect(itinerary).toBeDefined();
+      // With WALK_LEG_PLAN legs=[RAIL, WALK, RAIL]:
+      //   RAIL at index 0 → leg1 (segment_order=1, in response.leg1, NOT in intended_itinerary)
+      //   WALK at index 1 → skipped (no RID)
+      //   RAIL at index 2 → intended_itinerary[0]
+      //     GAPPED (old): segment_order = index+1 = 2+1 = 3
+      //     DENSE (SS2):  segment_order = 2 (second rail leg, contiguous)
+      expect(itinerary[0]?.segment_order).toBe(2); // DENSE — FAILS NOW (returns 3)
     });
 
     it('AC-5: WALK leg does not appear in alternatives[] of adjacent rail legs', async () => {
