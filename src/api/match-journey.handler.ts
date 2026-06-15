@@ -88,6 +88,11 @@ const matchJourneySchema = z.object({
     .optional(),
   // BL-336 SS1b: intended onward plan derivation flag (AC-9)
   onward_plan: z.boolean().optional().default(false),
+  // BL-336 SS2: intended legs for multi-leg journey matching (AC-5)
+  intended_legs: z.array(z.object({
+    segment_order: z.number().int().positive(),
+    rid: z.string().min(1),
+  })).optional(),
 }).refine(
   (data) => !(data.onward_plan === true && !data.actual_rid),
   {
@@ -196,6 +201,8 @@ export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationRe
           actual_rid: body.actual_rid,
           // BL-336 SS1b: onward plan flag (forward only when truthy to preserve backward-compat)
           ...(body.onward_plan ? { onward_plan: body.onward_plan } : {}),
+          // BL-336 SS2: intended legs (forward only when present and non-empty to preserve backward-compat)
+          ...(body.intended_legs && body.intended_legs.length > 0 ? { intended_legs: body.intended_legs } : {}),
         },
         correlationId
       );
@@ -284,6 +291,27 @@ export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationRe
       }
     } catch (error: any) {
       const durationMs = Date.now() - startMs;
+
+      // BL-336 SS2: map INVALID_INTENDED_LEG_RID → 400 (AC-5)
+      if (error?.code === 'INVALID_INTENDED_LEG_RID') {
+        const outcome = 'invalid_intended_leg';
+
+        getLog().info('POST /journeys/match — invalid intended_leg RID', {
+          correlation_id: correlationId,
+          user_id: body.user_id,
+          outcome,
+          duration_ms: durationMs,
+          error: error.message,
+        });
+
+        getCounter().inc({ outcome });
+        getHistogram().observe({ outcome }, durationMs / 1000);
+
+        res.status(400).json({
+          error: 'invalid_intended_leg',
+        });
+        return;
+      }
 
       if (error?.code === 'UPSTREAM_UNAVAILABLE' || error?.message?.includes('UPSTREAM_UNAVAILABLE')) {
         const outcome = 'upstream_unavailable';
