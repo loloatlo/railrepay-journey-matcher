@@ -31,6 +31,34 @@ function getLogger() {
   return _logger;
 }
 
+// ── Ticket-type normalisation (BL-336 SS4 / T2-fix) ─────────────────────────
+//
+// Raw OCR strings may arrive in many surface forms, e.g.:
+//   "off-peak day return", "ANYTIME_DAY", "any permitted", "super off-peak"
+// We normalise once (trim → lowercase → collapse [-_ ]+ → single space) and then
+// test for membership in the anytime/flex-ticket class.
+//
+// MUST NOT match 'advance' or other fixed-service types.
+//
+// Exported for unit testing but intentionally kept in this module.
+export function isAnytimeTicketType(ticketType: string | undefined | null): boolean {
+  if (!ticketType) return false;
+  // Normalise: trim whitespace, lowercase, collapse any run of hyphens/underscores/spaces to a single space.
+  const n = ticketType.trim().toLowerCase().replace(/[-_ ]+/g, ' ');
+  // Flex/open ticket classes that allow any service.
+  // Using startsWith so suffix variants (_DAY, _SINGLE, _RETURN, day return, day single …) are covered.
+  return (
+    n === 'anytime' ||
+    n.startsWith('anytime ') ||
+    n === 'any permitted' ||
+    n.startsWith('any permitted ') ||
+    n === 'off peak' ||
+    n.startsWith('off peak ') ||
+    n === 'super off peak' ||
+    n.startsWith('super off peak ')
+  );
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface MatchJourneyInput {
@@ -355,7 +383,7 @@ export class JourneyMatcherService {
     // ── JM-002: Routing logic (DR-003) ─────────────────────────────────────
     // Any-Permitted ticket + NO attestation → return candidate list (AC-2)
     // Constraint 1: candidate list from OTP timetable data ONLY — no delay data.
-    const isAnytime = input.ticket_type === 'anytime' || input.ticket_type === 'any_permitted';
+    const isAnytime = isAnytimeTicketType(input.ticket_type);
     const hasAttestation = input.actual_rid !== undefined || input.actual_departure_time !== undefined;
 
     // ── BL-336 SS1b: Intended onward plan derivation (DR-004) ──────────────
