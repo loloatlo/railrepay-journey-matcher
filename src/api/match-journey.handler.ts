@@ -86,7 +86,15 @@ const matchJourneySchema = z.object({
     .string()
     .refine((val) => val.trim().length > 0, { message: 'actual_rid must not be blank when present' })
     .optional(),
-});
+  // BL-336 SS1b: intended onward plan derivation flag (AC-9)
+  onward_plan: z.boolean().optional().default(false),
+}).refine(
+  (data) => !(data.onward_plan === true && !data.actual_rid),
+  {
+    message: 'onward_plan:true requires actual_rid',
+    path: ['actual_rid'],
+  }
+);
 
 // ── Module-level service singleton ───────────────────────────────────────────
 // Deferred until first createMatchJourneyRouter() call so that
@@ -186,13 +194,30 @@ export function createMatchJourneyRouter(pool: Pool, stationResolver?: StationRe
           ticket_type: body.ticket_type,
           actual_departure_time: body.actual_departure_time,
           actual_rid: body.actual_rid,
+          // BL-336 SS1b: onward plan flag (forward only when truthy to preserve backward-compat)
+          ...(body.onward_plan ? { onward_plan: body.onward_plan } : {}),
         },
         correlationId
       );
 
       const durationMs = Date.now() - startMs;
 
-      if (result.status === 'matched') {
+      if (result.status === 'intended_itinerary') {
+        // BL-336 SS1b: onward plan derivation — HTTP 200 with the full intended itinerary body.
+        const outcome = 'intended_itinerary';
+
+        getLog().info('POST /journeys/match returned intended_itinerary', {
+          correlation_id: correlationId,
+          user_id: body.user_id,
+          outcome,
+          duration_ms: Date.now() - startMs,
+        });
+
+        getCounter().inc({ outcome });
+        getHistogram().observe({ outcome }, (Date.now() - startMs) / 1000);
+
+        res.status(200).json(result);
+      } else if (result.status === 'matched') {
         const outcome = 'matched';
 
         getLog().info('POST /journeys/match succeeded', {

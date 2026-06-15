@@ -45,6 +45,8 @@ export interface MatchJourneyInput {
   ticket_type?: string;
   actual_departure_time?: string;
   actual_rid?: string;
+  // BL-336 SS1b: intended onward plan derivation flag
+  onward_plan?: boolean;
 }
 
 export interface MatchJourneyResultMatched {
@@ -79,6 +81,29 @@ export interface MatchJourneyResultCandidates {
   candidates: MatchJourneyCandidateItem[];
 }
 
+/** BL-336 SS1b: leg/segment shape shared by leg1 and intended_itinerary entries */
+export interface OnwardLegInfo {
+  rid: string;
+  scheduled_departure: string;
+  scheduled_arrival: string;
+  origin_crs: string;
+  destination_crs: string;
+  toc_code: string;
+  operator_name?: string;
+}
+
+/** BL-336 SS1b: Result variant for onward_plan:true derivation */
+export interface MatchJourneyResultIntendedItinerary {
+  journey_id: null;
+  status: 'intended_itinerary';
+  leg1: OnwardLegInfo & { segment_order: 1 };
+  intended_itinerary: Array<{
+    segment_order: number;
+    planned: OnwardLegInfo;
+    alternatives: OnwardLegInfo[];
+  }>;
+}
+
 /**
  * Combined result type with all fields to allow direct property access in test
  * assertions without discriminant narrowing. `status` is the discriminator.
@@ -86,7 +111,7 @@ export interface MatchJourneyResultCandidates {
  */
 export type MatchJourneyResult = {
   journey_id: string | null;
-  status: 'matched' | 'no_match' | 'candidates';
+  status: 'matched' | 'no_match' | 'candidates' | 'intended_itinerary';
   // matched fields
   origin_crs: string;
   destination_crs: string;
@@ -96,6 +121,13 @@ export type MatchJourneyResult = {
   reason: 'station_resolution_failed' | 'no_route_found' | 'needs_disambiguation' | undefined;
   detail: string | undefined;
   candidates?: Array<{ crs_code: string; name: string; display_name: string } | MatchJourneyCandidateItem>;
+  // BL-336 SS1b: intended itinerary fields
+  leg1?: OnwardLegInfo & { segment_order: 1 };
+  intended_itinerary?: Array<{
+    segment_order: number;
+    planned: OnwardLegInfo;
+    alternatives: OnwardLegInfo[];
+  }>;
 };
 
 export interface JourneyMatcherServiceOptions {
@@ -321,6 +353,153 @@ export class JourneyMatcherService {
     // Constraint 1: candidate list from OTP timetable data ONLY — no delay data.
     const isAnytime = input.ticket_type === 'anytime' || input.ticket_type === 'any_permitted';
     const hasAttestation = input.actual_rid !== undefined || input.actual_departure_time !== undefined;
+
+    // ── BL-336 SS1b: Intended onward plan derivation (DR-004) ──────────────
+    // Triggered when: isAnytime AND actual_rid present AND onward_plan === true.
+    // Reuses otpPlanResult already in hand — NO extra OTP call.
+    // NO persist — returns journey_id:null.
+    if (isAnytime && input.actual_rid && input.onward_plan === true) {
+      const actualRid = input.actual_rid;
+
+      // Step 1: Find the natural-plan itinerary — first itinerary whose legs[0] RID == actual_rid.
+      const naturalItinerary = otpPlanResult.itineraries.find((itin) => {
+        const firstLeg = itin.legs[0];
+        if (!firstLeg?.trip?.gtfsId) return false;
+        const parts = firstLeg.trip.gtfsId.split(':');
+        const rid = parts.length > 1 ? parts[1] : parts[0];
+        return rid === actualRid;
+      });
+
+      if (!naturalItinerary) {
+        // No itinerary found for the attested RID — cannot derive onward plan.
+        // Do NOT enter the intended_itinerary branch; fall through to existing paths.
+        getLogger().warn('onward_plan: attested RID not found in OTP itineraries — falling through', {
+          correlation_id: correlationId,
+          actual_rid: actualRid,
+          outcome: 'onward_plan_fallback',
+        });
+      } else {
+        // Step 2: Build leg1 from the natural plan's legs[0].
+        const firstLeg = naturalItinerary.legs[0];
+        const leg1: OnwardLegInfo & { segment_order: 1 } = {
+          rid: actualRid,
+          scheduled_departure: new Date(firstLeg.startTime).toISOString(),
+          scheduled_arrival: new Date(firstLeg.endTime).toISOString(),
+          origin_crs: firstLeg.from?.stop?.gtfsId ? extractCRS(firstLeg.from.stop.gtfsId) : '',
+          destination_crs: firstLeg.to?.stop?.gtfsId ? extractCRS(firstLeg.to.stop.gtfsId) : '',
+          toc_code: firstLeg.route?.gtfsId ? extractCRS(firstLeg.route.gtfsId) : 'XX',
+          operator_name: firstLeg.route?.agency?.name,
+          segment_order: 1,
+        };
+
+        // Step 3: Build the pool of itineraries sharing the attested leg-1 RID (for alternatives).
+        const sharedLeg1Itineraries = otpPlanResult.itineraries.filter((itin) => {
+          const leg = itin.legs[0];
+          if (!leg?.trip?.gtfsId) return false;
+          const parts = leg.trip.gtfsId.split(':');
+          const rid = parts.length > 1 ? parts[1] : parts[0];
+          return rid === actualRid;
+        });
+
+        // Step 4: Build intended_itinerary from natural plan's legs[1..] — skip non-rail.
+        const intended_itinerary: MatchJourneyResultIntendedItinerary['intended_itinerary'] = [];
+
+        for (let idx = 1; idx < naturalItinerary.legs.length; idx++) {
+          const leg = naturalItinerary.legs[idx];
+          // Skip non-rail legs (no trip.gtfsId = no RID).
+          if (!leg?.trip?.gtfsId) continue;
+
+          const legParts = leg.trip.gtfsId.split(':');
+          const legRid = legParts.length > 1 ? legParts[1] : legParts[0];
+          const tocCode = leg.route?.gtfsId ? extractCRS(leg.route.gtfsId) : 'XX';
+          const operatorName: string | undefined = leg.route?.agency?.name;
+
+          const planned: OnwardLegInfo = {
+            rid: legRid,
+            scheduled_departure: new Date(leg.startTime).toISOString(),
+            scheduled_arrival: new Date(leg.endTime).toISOString(),
+            origin_crs: leg.from?.stop?.gtfsId ? extractCRS(leg.from.stop.gtfsId) : '',
+            destination_crs: leg.to?.stop?.gtfsId ? extractCRS(leg.to.stop.gtfsId) : '',
+            toc_code: tocCode,
+            ...(operatorName !== undefined ? { operator_name: operatorName } : {}),
+          };
+
+          // Build alternatives: from the shared-leg-1 pool, extract the RID at this leg position.
+          // Dedup by RID, exclude planned.rid, schedule-rank ascending, take top-3.
+          const seenAltRids = new Set<string>();
+          const rawAlts: Array<{ rid: string; startTime: number; info: OnwardLegInfo }> = [];
+
+          for (const altItin of sharedLeg1Itineraries) {
+            const altLeg = altItin.legs[idx];
+            if (!altLeg?.trip?.gtfsId) continue; // no RID at this position → skip
+
+            const altLegParts = altLeg.trip.gtfsId.split(':');
+            const altRid = altLegParts.length > 1 ? altLegParts[1] : altLegParts[0];
+
+            // Exclude planned and deduplicate.
+            if (altRid === planned.rid) continue;
+            if (seenAltRids.has(altRid)) continue;
+            seenAltRids.add(altRid);
+
+            const altTocCode = altLeg.route?.gtfsId ? extractCRS(altLeg.route.gtfsId) : 'XX';
+            const altOperatorName: string | undefined = altLeg.route?.agency?.name;
+
+            const altInfo: OnwardLegInfo = {
+              rid: altRid,
+              scheduled_departure: new Date(altLeg.startTime).toISOString(),
+              scheduled_arrival: new Date(altLeg.endTime).toISOString(),
+              origin_crs: altLeg.from?.stop?.gtfsId ? extractCRS(altLeg.from.stop.gtfsId) : '',
+              destination_crs: altLeg.to?.stop?.gtfsId ? extractCRS(altLeg.to.stop.gtfsId) : '',
+              toc_code: altTocCode,
+              ...(altOperatorName !== undefined ? { operator_name: altOperatorName } : {}),
+            };
+            rawAlts.push({ rid: altRid, startTime: altLeg.startTime, info: altInfo });
+          }
+
+          // Schedule-rank ascending, take top-3.
+          rawAlts.sort((a, b) => a.startTime - b.startTime);
+          const alternatives = rawAlts.slice(0, 3).map((a) => a.info);
+
+          // AC-6: log fallback when alternatives is empty.
+          if (alternatives.length === 0) {
+            getLogger().info('onward_plan: no alternatives at interchange', {
+              correlation_id: correlationId,
+              actual_rid: actualRid,
+              segment_order: idx + 1,
+              outcome: 'onward_plan_fallback',
+            });
+          }
+
+          intended_itinerary.push({
+            segment_order: idx + 1,
+            planned,
+            alternatives,
+          });
+        }
+
+        // AC-11: log the onward_plan outcome.
+        getLogger().info('onward_plan: intended itinerary derived', {
+          correlation_id: correlationId,
+          actual_rid: actualRid,
+          onward_legs_count: intended_itinerary.length,
+          outcome: 'intended_itinerary',
+        });
+
+        // AC-8: NO-PERSIST — return without calling persistJourney.
+        return {
+          journey_id: null,
+          status: 'intended_itinerary' as const,
+          leg1,
+          intended_itinerary,
+          origin_crs: '',
+          destination_crs: '',
+          segments: [],
+          idempotent_replay: false,
+          reason: undefined,
+          detail: undefined,
+        };
+      }
+    }
 
     if (isAnytime && !hasAttestation) {
       // JM-003: AC-1/AC-2/AC-3 — bound to 3 schedule-closest, delay-agnostic selection.
