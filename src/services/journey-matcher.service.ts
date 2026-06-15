@@ -47,6 +47,10 @@ export interface MatchJourneyInput {
   actual_rid?: string;
   // BL-336 SS1b: intended onward plan derivation flag
   onward_plan?: boolean;
+  // BL-336 SS2: intended onward legs for multi-leg attested bind
+  // segment_order is 1-indexed (rail-only, contiguous); leg-1 comes from actual_rid.
+  // Onward legs (segment_order 2..N) each carry the passenger's chosen RID.
+  intended_legs?: Array<{ segment_order: number; rid: string }>;
 }
 
 export interface MatchJourneyResultMatched {
@@ -402,12 +406,22 @@ export class JourneyMatcherService {
         });
 
         // Step 4: Build intended_itinerary from natural plan's legs[1..] — skip non-rail.
+        // BL-336 SS2 (AC-7 SS1b): use CONTIGUOUS-RAIL dense counter for segment_order.
+        // leg-1 (attested) is always segment_order=1 (in response.leg1, NOT in intended_itinerary).
+        // Onward rail legs: 2, 3, ..., N. WALK legs skipped — do NOT count toward segment_order.
         const intended_itinerary: MatchJourneyResultIntendedItinerary['intended_itinerary'] = [];
+
+        // railSegmentCounter starts at 1 (leg-1 = attested, segment_order=1).
+        // Each onward RAIL leg increments this to 2, 3, N.
+        let railSegmentCounter = 1;
 
         for (let idx = 1; idx < naturalItinerary.legs.length; idx++) {
           const leg = naturalItinerary.legs[idx];
-          // Skip non-rail legs (no trip.gtfsId = no RID).
+          // Skip non-rail legs (no trip.gtfsId = no RID). They do NOT increment the counter.
           if (!leg?.trip?.gtfsId) continue;
+
+          railSegmentCounter += 1;
+          const onwardSegmentOrder = railSegmentCounter;
 
           const legParts = leg.trip.gtfsId.split(':');
           const legRid = legParts.length > 1 ? legParts[1] : legParts[0];
@@ -465,13 +479,13 @@ export class JourneyMatcherService {
             getLogger().info('onward_plan: no alternatives at interchange', {
               correlation_id: correlationId,
               actual_rid: actualRid,
-              segment_order: idx + 1,
+              segment_order: onwardSegmentOrder,
               outcome: 'onward_plan_fallback',
             });
           }
 
           intended_itinerary.push({
-            segment_order: idx + 1,
+            segment_order: onwardSegmentOrder,
             planned,
             alternatives,
           });
@@ -618,6 +632,150 @@ export class JourneyMatcherService {
       };
     }
 
+    // ── BL-336 SS2: Intended-itinerary attested bind ────────────────────────
+    // When actual_rid + intended_legs (non-empty) are both present, bind using the
+    // passenger's explicit per-leg selection rather than the OTP natural order.
+    //
+    // Algorithm:
+    //   1. Validate: each intended_legs[].rid must appear in at least one OTP leg
+    //      across all itineraries. Unknown RID → throw (handler maps to 400).
+    //   2. Build segment-1 from the OTP leg matching actual_rid.
+    //   3. Build segment-2..N by looking up each intended_legs[].rid in OTP legs.
+    //   4. Persist N rail-only contiguous segments (dense 1..N).
+    //
+    // Backward-compat (AC-4): if intended_legs is absent or empty, fall through
+    // to the existing attested-bind path (OTP natural-order, single-leg).
+    const hasIntendedLegs = Array.isArray(input.intended_legs) && input.intended_legs.length > 0;
+
+    if (hasAttestation && input.actual_rid && hasIntendedLegs) {
+      const actualRid = input.actual_rid;
+      const intendedLegs = input.intended_legs!;
+
+      // Build a flat lookup of all RIDs present in any OTP itinerary leg.
+      // For each RID we store the first OTP leg data found (schedule, CRS, toc).
+      const ridToLegData = new Map<string, {
+        startTime: number;
+        endTime: number;
+        fromCrs: string;
+        toCrs: string;
+        tocCode: string;
+      }>();
+
+      for (const itin of otpPlanResult.itineraries) {
+        for (const leg of itin.legs) {
+          if (!leg.trip?.gtfsId) continue;
+          const ridParts = leg.trip.gtfsId.split(':');
+          const rid = ridParts.length > 1 ? ridParts[1] : ridParts[0];
+          if (!ridToLegData.has(rid)) {
+            ridToLegData.set(rid, {
+              startTime: leg.startTime,
+              endTime: leg.endTime,
+              fromCrs: leg.from?.stop?.gtfsId ? extractCRS(leg.from.stop.gtfsId) : '',
+              toCrs: leg.to?.stop?.gtfsId ? extractCRS(leg.to.stop.gtfsId) : '',
+              tocCode: leg.route?.gtfsId ? extractCRS(leg.route.gtfsId) : 'XX',
+            });
+          }
+        }
+      }
+
+      // AC-5: validate that every intended_legs RID is present in the OTP plan.
+      for (const intentedLeg of intendedLegs) {
+        if (!ridToLegData.has(intentedLeg.rid)) {
+          const validationErr = new Error(
+            `intended_legs RID not found in OTP plan: ${intentedLeg.rid}`
+          );
+          (validationErr as any).code = 'INVALID_INTENDED_LEG_RID';
+          (validationErr as any).status = 400;
+          throw validationErr;
+        }
+      }
+
+      // Build segment-1 from actual_rid's OTP leg data.
+      const leg1Data = ridToLegData.get(actualRid);
+      if (!leg1Data) {
+        // actual_rid not in OTP plan — fall through to existing attested-bind path.
+        getLogger().warn('SS2: actual_rid not in OTP plan, falling through to standard bind', {
+          correlation_id: correlationId,
+          actual_rid: actualRid,
+        });
+      } else {
+        // Assemble N segments: segment-1 = actual_rid, segments 2..N = intended_legs order.
+        const ss2Segments: PersistJourneySegment[] = [];
+
+        ss2Segments.push({
+          segment_order: 1,
+          origin_crs: leg1Data.fromCrs,
+          destination_crs: leg1Data.toCrs,
+          scheduled_departure: new Date(leg1Data.startTime).toISOString(),
+          scheduled_arrival: new Date(leg1Data.endTime).toISOString(),
+          rid: actualRid,
+          toc_code: leg1Data.tocCode,
+        });
+
+        // Sort intended_legs by segment_order ascending to ensure correct ordering.
+        const sortedIntendedLegs = [...intendedLegs].sort(
+          (a, b) => a.segment_order - b.segment_order,
+        );
+
+        let denseCounter = 1;
+        for (const intentedLeg of sortedIntendedLegs) {
+          denseCounter += 1;
+          const legData = ridToLegData.get(intentedLeg.rid)!;
+          ss2Segments.push({
+            segment_order: denseCounter,
+            origin_crs: legData.fromCrs,
+            destination_crs: legData.toCrs,
+            scheduled_departure: new Date(legData.startTime).toISOString(),
+            scheduled_arrival: new Date(legData.endTime).toISOString(),
+            rid: intentedLeg.rid,
+            toc_code: legData.tocCode,
+          });
+        }
+
+        // Derive CRS codes from first/last segment.
+        const originCrsForSS2 = ss2Segments[0].origin_crs ||
+          input.origin_station.substring(0, 3).toUpperCase();
+        const destCrsForSS2 = ss2Segments[ss2Segments.length - 1].destination_crs ||
+          input.destination_station.substring(0, 3).toUpperCase();
+
+        // Use the first OTP itinerary for departure/arrival datetimes (best approximation).
+        const refItin = otpPlanResult.itineraries[0];
+        const departureDt = new Date(refItin?.startTime ?? leg1Data.startTime).toISOString();
+        const arrivalDt = new Date(refItin?.endTime ?? leg1Data.endTime).toISOString();
+
+        getLogger().info('SS2: intended-itinerary attested bind — persisting N segments', {
+          correlation_id: correlationId,
+          actual_rid: actualRid,
+          segment_count: ss2Segments.length,
+          outcome: 'matched',
+        });
+
+        const ss2PersistInput: PersistJourneyInput = {
+          user_id: input.user_id,
+          origin_crs: originCrsForSS2,
+          destination_crs: destCrsForSS2,
+          departure_datetime: departureDt,
+          arrival_datetime: arrivalDt,
+          journey_type: journeyType,
+          segments: ss2Segments,
+          ticket_type: input.ticket_type ?? null,
+        };
+
+        const ss2Persisted = await this.persister.persistJourney(ss2PersistInput, correlationId);
+
+        return {
+          journey_id: ss2Persisted.journey_id,
+          status: 'matched' as const,
+          origin_crs: ss2Persisted.origin_crs,
+          destination_crs: ss2Persisted.destination_crs,
+          segments: ss2Persisted.segments,
+          idempotent_replay: ss2Persisted.idempotent_replay,
+          reason: undefined,
+          detail: undefined,
+        };
+      }
+    }
+
     // ── Select itinerary ────────────────────────────────────────────────────
     // AC-3: attestation supplied → bind to the itinerary matching actual_rid.
     // AC-4: fallback to lowest generalizedCost (existing behaviour) when no attestation.
@@ -717,9 +875,30 @@ export class JourneyMatcherService {
 
   /**
    * Build PersistJourneySegment array from OTP itinerary legs.
+   *
+   * BL-336 SS2: filters to RAIL-mode legs only — non-rail legs (WALK, BUS,
+   * interchange, etc.) are skipped entirely. segment_order is assigned using
+   * a dense 1-indexed rail-position counter (CONTIGUOUS-RAIL convention, DR-004).
+   * No gaps, no non-rail rows.
+   *
+   * Edge case (preserved): a RAIL-mode leg with no trip.gtfsId produces a segment
+   * with rid=null (data quality issue; preserved for backward-compat with existing
+   * branch-coverage tests and real-world partial OTP responses).
+   *
+   * Backward-compat: single-leg (1 rail leg) → segment_order=1, byte-identical
+   * to the previously deployed shape.
    */
   private buildSegments(itinerary: OTPItinerary): PersistJourneySegment[] {
-    return itinerary.legs.map((leg, index) => {
+    const segments: PersistJourneySegment[] = [];
+    let railCounter = 0;
+
+    for (const leg of itinerary.legs) {
+      // Skip non-RAIL legs (WALK, BUS, TRAM, etc.).
+      // RAIL legs with no trip.gtfsId are included with rid=null (data quality edge case).
+      if (leg.mode !== 'RAIL') continue;
+
+      railCounter += 1;
+
       const fromCrs = leg.from?.stop?.gtfsId
         ? extractCRS(leg.from.stop.gtfsId)
         : leg.from?.name?.substring(0, 3).toUpperCase() ?? 'UNK';
@@ -730,8 +909,8 @@ export class JourneyMatcherService {
       // Extract RID from trip.gtfsId (format: "1:YYYYMMDDNNNNNNN" → strip prefix)
       let rid: string | null = null;
       if (leg.trip?.gtfsId) {
-        const parts = leg.trip.gtfsId.split(':');
-        rid = parts.length > 1 ? parts[1] : parts[0];
+        const ridParts = leg.trip.gtfsId.split(':');
+        rid = ridParts.length > 1 ? ridParts[1] : ridParts[0];
       }
 
       // Extract TOC code from route.gtfsId (format: "1:GW" → "GW")
@@ -741,16 +920,18 @@ export class JourneyMatcherService {
         tocCode = parts.length > 1 ? parts[1] : parts[0];
       }
 
-      return {
-        segment_order: index + 1,
+      segments.push({
+        segment_order: railCounter,
         origin_crs: fromCrs,
         destination_crs: toCrs,
         scheduled_departure: new Date(leg.startTime).toISOString(),
         scheduled_arrival: new Date(leg.endTime).toISOString(),
         rid,
         toc_code: tocCode,
-      };
-    });
+      });
+    }
+
+    return segments;
   }
 }
 
